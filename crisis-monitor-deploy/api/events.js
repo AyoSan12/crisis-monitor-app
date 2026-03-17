@@ -169,20 +169,16 @@ async function fetchEONET() {
 // ReliefWeb (UN) — API resmi laporan krisis kemanusiaan
 // ============================================================
 async function fetchReliefWeb() {
-  // ReliefWeb v1 API — pakai GET dengan query params (lebih kompatibel)
-  const params = new URLSearchParams({
-    appname: 'crisismonitor',
-    'fields[include][]': ['title','date','source','country','disaster_type','url_alias'],
-    'sort[]': 'date:desc',
-    limit: '15',
-    preset: 'latest',
-  });
-  const res = await fetchWithTimeout(`https://api.reliefweb.int/v1/reports?${params}`, {
-    headers: {
-      'User-Agent': 'CrisisMonitor/1.0 (public emergency dashboard; contact@crisismonitor.app)',
-      'Accept': 'application/json',
-    },
-  });
+  // Simple GET — paling kompatibel, tidak perlu body
+  const res = await fetchWithTimeout(
+    'https://api.reliefweb.int/v1/reports?appname=crisismonitor&limit=15&sort[]=date:desc&fields[include][]=title&fields[include][]=date&fields[include][]=source&fields[include][]=country&fields[include][]=disaster_type&fields[include][]=url_alias',
+    {
+      headers: {
+        'User-Agent': 'CrisisMonitor/1.0',
+        'Accept': 'application/json',
+      },
+    }
+  );
   const data = await res.json();
   const catMap = {
     'Flood':            { cat: 'bencana',   badge: 'BANJIR',     severity: 'warning'  },
@@ -357,60 +353,40 @@ async function fetchNOAA() {
 }
 
 // ============================================================
-// ICRC — Palang Merah Internasional
-// Coba beberapa endpoint RSS yang diketahui aktif
+// OCHA (UN) — Situasi kemanusiaan & konflik (ganti ICRC yg 404)
+// ReliefWeb sudah cover ini, OCHA pakai endpoint berbeda
 // ============================================================
 async function fetchICRC() {
-  const endpoints = [
-    'https://www.icrc.org/en/stories.rss',
-    'https://www.icrc.org/en/feed',
-  ];
-  let text = '';
-  for (const url of endpoints) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)',
-          'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-        }
-      });
-      text = await res.text();
-      if (text.includes('<item>') || text.includes('<entry>')) break;
-    } catch(e) { continue; }
-  }
-  if (!text.includes('<item>') && !text.includes('<entry>')) {
-    throw new Error('ICRC RSS tidak dapat diakses');
-  }
-  const keywords = ['conflict','attack','war','humanitarian','civilian','detained','violence','hostage','armed','crisis','displaced','Gaza','Sudan','Ukraine','Myanmar','Syria','Yemen'];
-  // Support both RSS <item> and Atom <entry>
-  const itemRegex = text.includes('<item>') ? /<item>([\s\S]*?)<\/item>/g : /<entry>([\s\S]*?)<\/entry>/g;
-  const items = [...text.matchAll(itemRegex)].slice(0, 20);
-  function extract(block, tag) {
-    const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
-    return m ? (m[1] || m[2] || '').replace(/<[^>]*>/g, '').trim() : '';
-  }
-  const filtered = items.filter(m => keywords.some(k => m[1].toLowerCase().includes(k.toLowerCase())));
-  if (filtered.length === 0) return items.slice(0, 5).map((m, i) => buildICRCItem(m[1], i, extract));
-  return filtered.slice(0, 8).map((m, i) => buildICRCItem(m[1], i, extract));
-}
-function buildICRCItem(block, i, extract) {
-  const title = extract(block, 'title');
-  const desc  = extract(block, 'description') || extract(block, 'summary') || extract(block, 'content');
-  const link  = extract(block, 'link') || extract(block, 'id');
-  const pub   = extract(block, 'pubDate') || extract(block, 'published') || extract(block, 'updated');
-  const dt    = pub ? new Date(pub) : new Date();
-  const safedt = isNaN(dt) ? new Date() : dt;
-  return {
-    id: `icrc-${i}-${safedt.getTime()}`,
-    datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
-    severity: 'warning', cat: 'konflik', region: 'global', badge: 'KONFLIK',
-    title_id: title, title_en: title,
-    desc_id: desc.slice(0, 400) || 'Laporan ICRC (Palang Merah Internasional) tentang situasi konflik.',
-    desc_en: desc.slice(0, 400) || 'ICRC report on armed conflict and humanitarian law.',
-    source: 'ICRC', loc: 'Global',
-    url: link || 'https://icrc.org',
-    updates: [],
-  };
+  // Pakai ReliefWeb filter konflik sebagai sumber ICRC/konflik
+  const body = JSON.stringify({
+    preset: 'latest', limit: 10,
+    filter: { field: 'disaster_type.name', value: 'Conflict' },
+    fields: { include: ['title','date','source','country','url_alias'] },
+    sort: ['date:desc'],
+  });
+  const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
+    body,
+  });
+  const data = await res.json();
+  return (data?.data || []).map(item => {
+    const f = item.fields;
+    const dt = f.date?.created ? new Date(f.date.created) : new Date();
+    const country = f.country?.[0]?.name || 'Global';
+    const source = Array.isArray(f.source) ? f.source.map(s => s.name).join(', ') : 'OCHA';
+    return {
+      id: `icrc-rw-${item.id}`,
+      datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+      severity: 'warning', cat: 'konflik', region: 'global', badge: 'KONFLIK',
+      title_id: f.title, title_en: f.title,
+      desc_id: `Laporan konflik dari ${source} mengenai situasi di ${country}.`,
+      desc_en: `Conflict report from ${source} on the situation in ${country}.`,
+      source: source || 'OCHA / ReliefWeb', loc: country,
+      url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
+      updates: [],
+    };
+  });
 }
 
 // ============================================================
@@ -432,21 +408,36 @@ async function fetchCrisisGroup() {
   // Bersihkan HTML entities dan tags dari deskripsi
   function cleanHTML(str) {
     return str
-      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#\d+;/g, '')
       .replace(/<[^>]*>/g, '')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+  // Potong bagian awal yang berisi noise (username, timestamp, nav)
+  function extractDesc(rawDesc, title) {
+    let text = cleanHTML(rawDesc);
+    // Hapus judul artikel yang diulang di awal
+    if (text.startsWith(title)) text = text.slice(title.length).trim();
+    // Hapus username editor (pendek, sebelum pola tanggal)
+    text = text.replace(/^[a-z_]+\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+/i, '');
+    // Hapus pola tanggal di awal: "Mon, 03/16/2026 - 23:49"
+    text = text.replace(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\d{2}\/\d{2}\/\d{4}\s+-\s+\d{2}:\d{2}\s+/i, '');
+    // Hapus nama lokasi pendek di awal (mis. "Washington", "Tehran", "Lebanon") diikuti pola tanggal
+    text = text.replace(/^\w[\w\s]{0,20}\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\d{2}\/\d{2}\/\d{4}[^a-zA-Z]*/i, '');
+    // Hapus pola tanggal lagi setelah lokasi: "16 March 2026"
+    text = text.replace(/^\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\s+/i, '');
+    // Hapus nav links yang tersisa (tanda banyak kata kapital berurutan)
+    text = text.replace(/Latest Updates Africa Asia-Pacific[\s\S]{0,200}My Reading List\s*/i, '');
+    text = text.replace(/Latest Updates[\s\S]{0,100}Visual Explainers[\s\S]{0,50}My Reading List\s*/i, '');
+    text = text.trim();
+    if (!text || text.length < 30) return 'Analisis terbaru dari International Crisis Group tentang situasi konflik global.';
+    return text.slice(0, 400);
   }
   return items.map((m, i) => {
     const block = m[1];
     const title = cleanHTML(extract(block, 'title'));
     const rawDesc = extract(block, 'description');
-    // Ambil hanya teks pertama sebelum HTML markup berat
-    let desc = cleanHTML(rawDesc).slice(0, 400);
-    // Kalau desc sama dengan title atau terlalu pendek, beri fallback
-    if (!desc || desc === title || desc.length < 20) {
-      desc = 'Analisis terbaru dari International Crisis Group tentang situasi konflik global.';
-    }
+    const desc = extractDesc(rawDesc, title);
     const link  = extract(block, 'link');
     const pub   = extract(block, 'pubDate');
     let dt = new Date();
@@ -469,37 +460,23 @@ async function fetchCrisisGroup() {
 }
 
 // ============================================================
-// MSF (Dokter Lintas Batas) — beberapa endpoint
+// Al Jazeera — Berita konflik & kemanusiaan (ganti MSF yg 403)
+// Sumber berita netral internasional dengan RSS publik
 // ============================================================
 async function fetchMSF() {
-  const endpoints = [
-    'https://www.msf.org/en/rss',
-    'https://www.msf.org/rss',
-    'https://www.msf.org/en/article/rss.xml',
-  ];
-  let text = '';
-  for (const url of endpoints) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)',
-          'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-        }
-      });
-      text = await res.text();
-      if (text.includes('<item>')) break;
-    } catch(e) { continue; }
-  }
-  if (!text.includes('<item>')) throw new Error('MSF RSS tidak dapat diakses');
-  const keywords = ['crisis','conflict','attack','emergency','killed','wounded','hospital','humanitarian','displaced','refugee','violence','war','bombing'];
-  const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
+  const res = await fetchWithTimeout('https://www.aljazeera.com/xml/rss/all.xml', {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
+  });
+  const text = await res.text();
+  const keywords = ['war','conflict','attack','strike','killed','wounded','crisis','airstrike','military','troops','fighting','ceasefire','offensive','humanitarian','displaced','refugee','massacre','siege','bombing'];
+  const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 30);
   function extract(block, tag) {
     const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
     return m ? (m[1] || m[2] || '').trim() : '';
   }
   return items
     .filter(m => keywords.some(k => m[1].toLowerCase().includes(k)))
-    .slice(0, 8)
+    .slice(0, 10)
     .map((m, i) => {
       const block = m[1];
       const title = extract(block, 'title');
@@ -509,16 +486,16 @@ async function fetchMSF() {
       const dt    = pub ? new Date(pub) : new Date();
       const safedt = isNaN(dt) ? new Date() : dt;
       const tl    = title.toLowerCase();
-      const severity = (tl.includes('attack')||tl.includes('killed')||tl.includes('crisis')) ? 'critical' : 'warning';
+      const severity = (tl.includes('killed')||tl.includes('attack')||tl.includes('airstrike')||tl.includes('massacre')) ? 'critical' : 'warning';
       return {
-        id: `msf-${i}-${safedt.getTime()}`,
+        id: `aj-${i}-${safedt.getTime()}`,
         datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
-        severity, cat: 'konflik', region: 'global', badge: 'MSF',
+        severity, cat: 'konflik', region: 'global', badge: 'KONFLIK',
         title_id: title, title_en: title,
-        desc_id: desc || 'Laporan lapangan dari MSF (Dokter Lintas Batas).',
-        desc_en: desc || 'Field report from MSF (Médecins Sans Frontières).',
-        source: 'MSF', loc: 'Global',
-        url: link || 'https://msf.org',
+        desc_id: desc || 'Laporan konflik terbaru dari Al Jazeera.',
+        desc_en: desc || 'Latest conflict report from Al Jazeera.',
+        source: 'Al Jazeera', loc: 'Global',
+        url: link || 'https://aljazeera.com',
         updates: [],
       };
     });
