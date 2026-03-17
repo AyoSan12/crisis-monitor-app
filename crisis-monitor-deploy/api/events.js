@@ -165,15 +165,22 @@ async function fetchEONET() {
 // ============================================================
 // ReliefWeb (UN) — Laporan krisis & kemanusiaan
 // ============================================================
+// ============================================================
+// ReliefWeb (UN) — API resmi laporan krisis kemanusiaan
+// ============================================================
 async function fetchReliefWeb() {
   const body = JSON.stringify({
     preset: 'latest', limit: 15,
     fields: { include: ['title','date','source','country','disaster_type','url_alias'] },
     sort: ['date:desc'],
   });
-  const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
+  const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor&profile=list', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'CrisisMonitor/1.0 (public emergency dashboard)',
+    },
     body,
   });
   const data = await res.json();
@@ -231,10 +238,10 @@ async function fetchGDACS() {
     const tl    = title.toLowerCase();
     const severity = tl.includes('red') ? 'critical' : tl.includes('orange') ? 'warning' : 'info';
     let cat = 'bencana', badge = 'BENCANA';
-    if (tl.includes('earthquake'))                                         { cat = 'gempa';    badge = 'GEMPA'; }
+    if (tl.includes('earthquake'))                                          { cat = 'gempa';   badge = 'GEMPA'; }
     else if (tl.includes('cyclone')||tl.includes('hurricane')||tl.includes('typhoon')) { cat = 'cuaca'; badge = 'SIKLON'; }
-    else if (tl.includes('flood'))                                         { cat = 'bencana';  badge = 'BANJIR'; }
-    else if (tl.includes('volcano'))                                       { cat = 'bencana';  badge = 'GUNUNG API'; }
+    else if (tl.includes('flood'))                                          { cat = 'bencana'; badge = 'BANJIR'; }
+    else if (tl.includes('volcano'))                                        { cat = 'bencana'; badge = 'GUNUNG API'; }
     const locMatch = title.match(/in\s+([A-Z][a-zA-Z\s,]+?)(?:\s+\(|$)/);
     return {
       id: `gdacs-${i}-${dt.getTime()}`,
@@ -251,12 +258,24 @@ async function fetchGDACS() {
 }
 
 // ============================================================
-// WHO — Wabah & kesehatan global via RSS
+// WHO — Wabah & kesehatan global via RSS (URL diperbarui)
 // ============================================================
 async function fetchWHO() {
-  const res = await fetchWithTimeout('https://www.who.int/rss-feeds/news-releases.xml');
-  const text = await res.text();
-  const keywords = ['outbreak','epidemic','disease','virus','mpox','cholera','dengue','ebola','flu','covid','plague','alert'];
+  // WHO mengubah URL RSS mereka - coba beberapa endpoint
+  const urls = [
+    'https://www.who.int/feeds/entity/csr/don/en/rss.xml',
+    'https://www.who.int/rss-feeds/news-releases.xml',
+  ];
+  let text = '';
+  for (const url of urls) {
+    try {
+      const res = await fetchWithTimeout(url);
+      text = await res.text();
+      if (text.includes('<item>')) break;
+    } catch(e) { continue; }
+  }
+  if (!text.includes('<item>')) return [];
+  const keywords = ['outbreak','epidemic','disease','virus','mpox','cholera','dengue','ebola','flu','covid','plague','alert','health'];
   const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
   function extract(block, tag) {
     const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
@@ -274,67 +293,86 @@ async function fetchWHO() {
       const dt    = pub ? new Date(pub) : new Date();
       return {
         id: `who-${i}-${dt.getTime()}`,
-        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        datetime: isNaN(dt) ? new Date().toISOString() : dt.toISOString(),
+        date: toDateStr(isNaN(dt) ? new Date() : dt),
+        time: toTimeUTC(isNaN(dt) ? new Date() : dt),
         severity: 'warning', cat: 'wabah', region: 'global', badge: 'WABAH',
         title_id: title, title_en: title,
         desc_id: desc || 'Rilis terbaru WHO terkait wabah atau kesehatan global.',
         desc_en: desc || 'Latest WHO release on outbreaks or global health.',
         source: 'WHO', loc: 'Global',
-        url: link || 'https://who.int',
+        url: link || 'https://who.int/health-topics/disease-outbreaks',
         updates: [],
       };
     });
 }
 
 // ============================================================
-// NOAA / NHC — Badai tropis aktif
+// NOAA / NHC — Badai tropis aktif (URL diperbarui)
 // ============================================================
 async function fetchNOAA() {
-  const res = await fetchWithTimeout('https://www.nhc.noaa.gov/nhc_rss.xml');
-  const text = await res.text();
-  const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 10);
+  const urls = [
+    'https://www.nhc.noaa.gov/nhc_at1.xml',
+    'https://www.nhc.noaa.gov/nhc_ep1.xml',
+    'https://www.nhc.noaa.gov/nhc_cp1.xml',
+  ];
+  const allItems = [];
   function extract(block, tag) {
     const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
     return m ? (m[1] || m[2] || '').trim() : '';
   }
-  return items.map((m, i) => {
-    const block = m[1];
-    const title = extract(block, 'title');
-    const desc  = extract(block, 'description').replace(/<[^>]*>/g, '').trim().slice(0, 300);
-    const link  = extract(block, 'link');
-    const pub   = extract(block, 'pubDate');
-    const dt    = pub ? new Date(pub) : new Date();
-    const tl    = title.toLowerCase();
-    return {
-      id: `noaa-${i}-${dt.getTime()}`,
-      datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
-      severity: (tl.includes('warning')||tl.includes('hurricane')||tl.includes('typhoon')) ? 'critical' : 'warning',
-      cat: 'cuaca', region: 'global', badge: 'BADAI',
-      title_id: title, title_en: title,
-      desc_id: desc || 'Peringatan cuaca ekstrem dari NOAA / National Hurricane Center.',
-      desc_en: desc || 'Extreme weather alert from NOAA / National Hurricane Center.',
-      source: 'NOAA / NHC', loc: 'Atlantik / Pasifik',
-      url: link || 'https://www.nhc.noaa.gov',
-      updates: [],
-    };
-  });
+  for (const url of urls) {
+    try {
+      const res = await fetchWithTimeout(url);
+      const text = await res.text();
+      const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
+      for (const m of items) {
+        const block = m[1];
+        const title = extract(block, 'title');
+        const desc  = extract(block, 'description').replace(/<[^>]*>/g, '').trim().slice(0, 300);
+        const link  = extract(block, 'link');
+        const pub   = extract(block, 'pubDate');
+        const dt    = pub ? new Date(pub) : new Date();
+        const tl    = title.toLowerCase();
+        if (!title) continue;
+        allItems.push({
+          id: `noaa-${allItems.length}-${dt.getTime()}`,
+          datetime: isNaN(dt) ? new Date().toISOString() : dt.toISOString(),
+          date: toDateStr(isNaN(dt) ? new Date() : dt),
+          time: toTimeUTC(isNaN(dt) ? new Date() : dt),
+          severity: (tl.includes('warning')||tl.includes('hurricane')) ? 'critical' : 'warning',
+          cat: 'cuaca', region: 'global', badge: 'BADAI',
+          title_id: title, title_en: title,
+          desc_id: desc || 'Peringatan cuaca ekstrem dari NOAA / National Hurricane Center.',
+          desc_en: desc || 'Extreme weather alert from NOAA / National Hurricane Center.',
+          source: 'NOAA / NHC', loc: 'Atlantik / Pasifik',
+          url: link || 'https://www.nhc.noaa.gov',
+          updates: [],
+        });
+      }
+    } catch(e) { continue; }
+  }
+  if (allItems.length === 0) throw new Error('No active storms');
+  return allItems;
 }
 
 // ============================================================
-// ICRC — Laporan konflik & hukum humaniter internasional
-// Sumber netral & terpercaya, NGO ICRC
+// ICRC — Palang Merah Internasional (RSS diperbarui)
 // ============================================================
 async function fetchICRC() {
-  const res = await fetchWithTimeout('https://www.icrc.org/en/rss');
+  // ICRC pakai Atom feed bukan RSS klasik
+  const res = await fetchWithTimeout('https://www.icrc.org/en/stories.rss', {
+    headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0', 'Accept': 'application/rss+xml,application/xml,text/xml' }
+  });
   const text = await res.text();
-  const keywords = ['conflict','attack','war','humanitarian','civilian','detained','violence','hostage','armed','crisis','displaced'];
+  const keywords = ['conflict','attack','war','humanitarian','civilian','detained','violence','hostage','armed','crisis','displaced','Gaza','Sudan','Ukraine','Myanmar'];
   const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
   function extract(block, tag) {
     const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
     return m ? (m[1] || m[2] || '').trim() : '';
   }
   return items
-    .filter(m => keywords.some(k => m[1].toLowerCase().includes(k)))
+    .filter(m => keywords.some(k => m[1].toLowerCase().includes(k.toLowerCase())))
     .slice(0, 8)
     .map((m, i) => {
       const block = m[1];
@@ -344,8 +382,10 @@ async function fetchICRC() {
       const pub   = extract(block, 'pubDate');
       const dt    = pub ? new Date(pub) : new Date();
       return {
-        id: `icrc-${i}-${dt.getTime()}`,
-        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        id: `icrc-${i}-${isNaN(dt) ? Date.now() : dt.getTime()}`,
+        datetime: isNaN(dt) ? new Date().toISOString() : dt.toISOString(),
+        date: toDateStr(isNaN(dt) ? new Date() : dt),
+        time: toTimeUTC(isNaN(dt) ? new Date() : dt),
         severity: 'warning', cat: 'konflik', region: 'global', badge: 'KONFLIK',
         title_id: title, title_en: title,
         desc_id: desc || 'Laporan ICRC (Palang Merah Internasional) tentang situasi konflik.',
@@ -359,10 +399,11 @@ async function fetchICRC() {
 
 // ============================================================
 // International Crisis Group — Analisis konflik mendalam
-// Lembaga riset konflik independen & netral
 // ============================================================
 async function fetchCrisisGroup() {
-  const res = await fetchWithTimeout('https://www.crisisgroup.org/rss');
+  const res = await fetchWithTimeout('https://www.crisisgroup.org/rss.xml', {
+    headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0', 'Accept': 'application/rss+xml,application/xml,text/xml' }
+  });
   const text = await res.text();
   const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 10);
   function extract(block, tag) {
@@ -374,8 +415,13 @@ async function fetchCrisisGroup() {
     const title = extract(block, 'title');
     const desc  = extract(block, 'description').replace(/<[^>]*>/g, '').trim().slice(0, 400);
     const link  = extract(block, 'link');
-    const pub   = extract(block, 'pubDate');
-    const dt    = pub ? new Date(pub) : new Date();
+    const pub   = extract(block, 'pubDate') || extract(block, 'dc:date') || extract(block, 'updated');
+    // Crisis Group kadang pakai format tanggal tidak standard
+    let dt = new Date();
+    if (pub) {
+      const parsed = new Date(pub);
+      if (!isNaN(parsed)) dt = parsed;
+    }
     return {
       id: `icg-${i}-${dt.getTime()}`,
       datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
@@ -391,13 +437,14 @@ async function fetchCrisisGroup() {
 }
 
 // ============================================================
-// MSF (Médecins Sans Frontières / Dokter Lintas Batas)
-// NGO medis independen, laporan langsung dari lapangan
+// MSF (Dokter Lintas Batas) — RSS diperbarui
 // ============================================================
 async function fetchMSF() {
-  const res = await fetchWithTimeout('https://www.msf.org/rss');
+  const res = await fetchWithTimeout('https://www.msf.org/en/rss', {
+    headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0', 'Accept': 'application/rss+xml,application/xml,text/xml' }
+  });
   const text = await res.text();
-  const keywords = ['crisis','conflict','attack','emergency','killed','wounded','hospital','humanitarian','displaced','refugee','violence'];
+  const keywords = ['crisis','conflict','attack','emergency','killed','wounded','hospital','humanitarian','displaced','refugee','violence','war','bombing'];
   const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
   function extract(block, tag) {
     const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
@@ -416,8 +463,10 @@ async function fetchMSF() {
       const tl    = title.toLowerCase();
       const severity = (tl.includes('attack')||tl.includes('killed')||tl.includes('crisis')) ? 'critical' : 'warning';
       return {
-        id: `msf-${i}-${dt.getTime()}`,
-        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        id: `msf-${i}-${isNaN(dt) ? Date.now() : dt.getTime()}`,
+        datetime: isNaN(dt) ? new Date().toISOString() : dt.toISOString(),
+        date: toDateStr(isNaN(dt) ? new Date() : dt),
+        time: toTimeUTC(isNaN(dt) ? new Date() : dt),
         severity, cat: 'konflik', region: 'global', badge: 'MSF',
         title_id: title, title_en: title,
         desc_id: desc || 'Laporan lapangan dari MSF (Dokter Lintas Batas).',
@@ -427,6 +476,48 @@ async function fetchMSF() {
         updates: [],
       };
     });
+}
+
+// ============================================================
+// PVMBG / MAGMA Indonesia — Status gunung berapi (via OCHA)
+// 403 dari magma.esdm.go.id, fallback ke ReliefWeb volcano reports
+// ============================================================
+async function fetchPVMBG() {
+  // Fallback: ambil laporan gunung api Indonesia dari ReliefWeb
+  const body = JSON.stringify({
+    preset: 'latest', limit: 8,
+    filter: { operator: 'AND', conditions: [
+      { field: 'disaster_type.name', value: 'Volcano' },
+      { field: 'country.name', value: 'Indonesia' },
+    ]},
+    fields: { include: ['title','date','source','country','url_alias'] },
+    sort: ['date:desc'],
+  });
+  try {
+    const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor&profile=list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body,
+    });
+    const data = await res.json();
+    return (data?.data || []).map(item => {
+      const f = item.fields;
+      const dt = f.date?.created ? new Date(f.date.created) : new Date();
+      return {
+        id: `pvmbg-rw-${item.id}`,
+        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        severity: 'warning', cat: 'bencana', region: 'id', badge: 'GUNUNG API',
+        title_id: f.title, title_en: f.title,
+        desc_id: 'Laporan aktivitas vulkanik Indonesia dari ReliefWeb / PVMBG.',
+        desc_en: 'Indonesia volcanic activity report via ReliefWeb / PVMBG.',
+        source: 'PVMBG / ReliefWeb', loc: 'Indonesia',
+        url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://magma.esdm.go.id',
+        updates: [],
+      };
+    });
+  } catch(e) {
+    throw new Error('PVMBG fallback gagal: ' + e.message);
+  }
 }
 
 // ============================================================
