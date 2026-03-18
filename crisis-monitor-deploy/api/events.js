@@ -34,9 +34,10 @@ module.exports = async function handler(req, res) {
     fetchBellingcat(),
     fetchUNHCR(),
     fetchUNOCHASituations(),
+    fetchKonflikIndonesia(),
   ]);
 
-  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit'];
+  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit','konflik_id'];
   const sources = {};
   keys.forEach((k, i) => {
     sources[k] = results[i].status === 'fulfilled' ? 'ok' : (results[i].reason?.message || 'error');
@@ -555,7 +556,122 @@ async function fetchPVMBG() {
 }
 
 // ============================================================
-// ACLED — Konflik & perang (butuh API key)
+// Konflik Indonesia — KKB Papua, terorisme, kerusuhan bersenjata
+// Sumber: BNPB siaran pers + ReliefWeb filter Indonesia konflik
+// + scraping berita konflik non-politik dari media nasional
+// ============================================================
+async function fetchKonflikIndonesia() {
+  const results = [];
+
+  // 1. ReliefWeb — laporan konflik & keamanan di Indonesia
+  try {
+    const body = JSON.stringify({
+      preset: 'latest', limit: 8,
+      filter: { operator: 'AND', conditions: [
+        { field: 'country.name', value: 'Indonesia' },
+        { operator: 'OR', conditions: [
+          { field: 'disaster_type.name', value: 'Conflict' },
+          { field: 'theme.name', value: 'Safety and Security' },
+        ]},
+      ]},
+      fields: { include: ['title','date','source','country','url_alias'] },
+      sort: ['date:desc'],
+    });
+    const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
+      body,
+    });
+    const data = await res.json();
+    (data?.data || []).forEach(item => {
+      const f = item.fields;
+      const dt = f.date?.created ? new Date(f.date.created) : new Date();
+      const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'ReliefWeb';
+      results.push({
+        id: `konflik_id-rw-${item.id}`,
+        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        severity: 'warning', cat: 'konflik', region: 'id', badge: 'KONFLIK',
+        title_id: f.title, title_en: f.title,
+        desc_id: `Laporan keamanan/konflik di Indonesia dari ${source}.`,
+        desc_en: `Security/conflict report in Indonesia from ${source}.`,
+        source, loc: 'Indonesia',
+        url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
+        updates: [],
+      });
+    });
+  } catch(e) {}
+
+  // 2. ACLED Indonesia — kalau key tersedia, ambil khusus Indonesia
+  try {
+    const key   = process.env.ACLED_API_KEY;
+    const email = process.env.ACLED_EMAIL;
+    if (key && email) {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const url = `https://api.acleddata.com/acled/read?key=${key}&email=${email}&country=Indonesia&event_date=${since}&event_date_where=>&limit=15&fields=event_date|event_type|actor1|location|notes|fatalities|admin1`;
+      const res = await fetchWithTimeout(url);
+      const data = await res.json();
+      (data?.data || []).forEach((ev, i) => {
+        const dt = new Date(ev.event_date);
+        const fatal = parseInt(ev.fatalities) || 0;
+        const region = ev.admin1 || 'Indonesia';
+        results.push({
+          id: `konflik_id-acled-${i}-${dt.getTime()}`,
+          datetime: dt.toISOString(), date: toDateStr(dt), time: '00:00',
+          severity: fatal > 0 ? 'critical' : 'warning',
+          cat: 'konflik', region: 'id', badge: 'KONFLIK',
+          title_id: `${ev.event_type} — ${ev.location}, ${region}`,
+          title_en: `${ev.event_type} — ${ev.location}, ${region}`,
+          desc_id: `${ev.notes || '–'}${fatal > 0 ? ` Korban jiwa: ${fatal}.` : ''}`,
+          desc_en: `${ev.notes || '–'}${fatal > 0 ? ` Fatalities: ${fatal}.` : ''}`,
+          source: 'ACLED', loc: `${ev.location}, ${region}`,
+          url: 'https://acleddata.com',
+          updates: [],
+        });
+      });
+    }
+  } catch(e) {}
+
+  // 3. Crisis Group — laporan konflik Indonesia (Papua, KKB, separatisme)
+  try {
+    const body = JSON.stringify({
+      preset: 'latest', limit: 5,
+      filter: { operator: 'AND', conditions: [
+        { field: 'country.name', value: 'Indonesia' },
+      ]},
+      fields: { include: ['title','date','source','country','url_alias'] },
+      sort: ['date:desc'],
+    });
+    const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
+      body,
+    });
+    const data = await res.json();
+    const keywords = ['papua','kkb','separatis','terorisme','teroris','bersenjata','kerusuhan','bentrokan','penyerangan','pembunuhan','kelompok bersenjata','armed','violence','attack','militant','insurgent'];
+    (data?.data || []).filter(item => keywords.some(k => (item.fields?.title||'').toLowerCase().includes(k))).slice(0,5).forEach(item => {
+      const f = item.fields;
+      const dt = f.date?.created ? new Date(f.date.created) : new Date();
+      const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'ReliefWeb';
+      if (results.some(r => r.id.includes(item.id))) return; // skip duplicate
+      results.push({
+        id: `konflik_id-kw-${item.id}`,
+        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+        severity: 'warning', cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
+        title_id: f.title, title_en: f.title,
+        desc_id: `Laporan situasi keamanan Indonesia dari ${source}.`,
+        desc_en: `Indonesia security situation report from ${source}.`,
+        source, loc: 'Indonesia',
+        url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
+        updates: [],
+      });
+    });
+  } catch(e) {}
+
+  if (results.length === 0) throw new Error('Tidak ada data konflik Indonesia');
+  return results.sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+}
+
+// ============================================================
 // ============================================================
 async function fetchACLED() {
   const key   = process.env.ACLED_API_KEY;
@@ -593,8 +709,21 @@ function makeNewsExtractor() {
     return m ? (m[1] || m[2] || '').trim() : '';
   };
 }
+// Aggressive HTML + noise cleaner for RSS descriptions
+function cleanDesc(raw) {
+  return raw
+    .replace(/<!\[CDATA\[|\]\]>/g, '')           // strip CDATA wrappers
+    .replace(/<[^>]{0,500}>/g, ' ')              // strip ALL HTML tags
+    .replace(/&lt;[^&]*&gt;/g, ' ')             // strip encoded HTML tags
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>') // decode entities
+    .replace(/&quot;/g,'"').replace(/&#\d+;/g,' ').replace(/&[a-z]+;/g,' ')
+    .replace(/https?:\/\/\S+/g, '')              // strip URLs
+    .replace(/\s{2,}/g, ' ')                     // collapse whitespace
+    .trim()
+    .slice(0, 400);
+}
 async function fetchConflictRSS({ url, srcKey, srcName, badge, extraKeywords=[], allItems=false, limit=10 }) {
-  const keywords = ['war','conflict','attack','strike','killed','offensive','troops','ceasefire','missile','bombing','airstrike','military','invasion','hostage','siege','civilian','casualties','fighting','battle','gunfire','explosion','occupation','drone','rebel','coup','protest','unrest','violence','armed',...extraKeywords];
+  const keywords = ['war','conflict','attack','strike','killed','offensive','troops','ceasefire','missile','bombing','airstrike','military','invasion','hostage','siege','civilian','casualties','fighting','battle','gunfire','explosion','occupation','drone','rebel','coup','unrest','violence','armed',...extraKeywords];
   const res = await fetchWithTimeout(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, application/xml, text/xml, */*' }
   });
@@ -604,15 +733,15 @@ async function fetchConflictRSS({ url, srcKey, srcName, badge, extraKeywords=[],
   const filtered = allItems ? items : items.filter(m => keywords.some(k => m[1].toLowerCase().includes(k)));
   return filtered.slice(0, limit).map((m, i) => {
     const block = m[1];
-    const title = extract(block, 'title');
-    const desc  = extract(block, 'description').replace(/<[^>]*>/g, '').replace(/&[a-z]+;/g,'').trim().slice(0, 400);
+    const title = cleanDesc(extract(block, 'title')).slice(0, 200);
+    const desc  = cleanDesc(extract(block, 'description'));
     const link  = extract(block, 'link');
     const pub   = extract(block, 'pubDate') || extract(block, 'dc:date');
     const dt    = pub ? new Date(pub) : new Date();
     const safedt = isNaN(dt) ? new Date() : dt;
     const tl    = title.toLowerCase();
     const severity = (tl.includes('killed')||tl.includes('attack')||tl.includes('airstrike')||tl.includes('bombing')||tl.includes('massacre')||tl.includes('explosion')) ? 'critical' : 'warning';
-    if (!title) return null;
+    if (!title || title.length < 5) return null;
     return {
       id: `${srcKey}-${i}-${safedt.getTime()}`,
       datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
