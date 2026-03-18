@@ -351,7 +351,7 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
       <div><div class="lname">Crisis Monitor</div><div class="lsub">ID & Global</div></div>
     </div>
     <div class="topbar-btns">
-      <div class="livechip"><div class="ldot spin" id="m-ldot"></div><span id="m-ltime">--:--</span></div>
+      <div class="livechip"><div class="ldot spin" id="m-ldot"></div></div>
       <div class="ibtn" onclick="toggleSrch()"><svg width="15" height="15"><use href="#ico-search"/></svg></div>
       <div class="ibtn" id="m-notif-btn" onclick="handleNotifBtn()" title="Notifikasi">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -961,9 +961,94 @@ setInterval(tick,1000);tick();
 
 /* ===== OFFLINE ===== */
 function saveOffline(){
-  const blob=new Blob([document.documentElement.outerHTML],{type:'text/html'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='crisis-monitor-'+new Date().toISOString().slice(0,16).replace('T','_').replace(':','')+'.html';a.click();
+  const evs = filtered();
+  const ts = new Date().toLocaleString([], {timeZone: USER_TZ, hour12: false});
+  const grouped = groupByDate(evs);
+
+  let evHTML = '';
+  grouped.forEach(([date, dayEvs]) => {
+    evHTML += `<div class="daysep">${fmtDate(date)}</div>`;
+    dayEvs.forEach(ev => {
+      const title = lang==='id' ? ev.title_id : ev.title_en;
+      const desc  = lang==='id' ? ev.desc_id  : ev.desc_en;
+      const sevColor = ev.severity==='critical' ? '#e03e3e' : ev.severity==='warning' ? '#d4860f' : '#3b82f6';
+      const badgeBg  = ev.severity==='critical' ? 'rgba(224,62,62,.15)' : ev.severity==='warning' ? 'rgba(212,134,15,.15)' : 'rgba(59,130,246,.15)';
+      const badgeTxt = ev.severity==='critical' ? '#f87171' : ev.severity==='warning' ? '#fbbf24' : '#93c5fd';
+      const sevLabel = ev.severity==='critical' ? (lang==='id'?'KRITIS':'CRITICAL') : ev.severity==='warning' ? (lang==='id'?'WASPADA':'WARNING') : 'INFO';
+      evHTML += `<div class="evc">
+        <div class="evdot" style="background:${sevColor};box-shadow:0 0 0 3px ${badgeBg}"></div>
+        <div class="evmain">
+          <div class="evbadges">
+            <span class="bdg" style="background:${badgeBg};color:${badgeTxt};border:1px solid ${sevColor}33">${sevLabel}</span>
+            <span class="bdg neutral">${ev.badge}</span>
+            <span class="bdg neutral">${ev.source}</span>
+          </div>
+          <div class="evtitle">${title}</div>
+          <div class="evdesc">${desc}</div>
+          <div class="evfoot">
+            <span>${ev.loc}</span> · <span>${ev.region==='id'?'Indonesia':'Global'}</span> · 
+            <span>${fmtLocalTime(ev.datetime)} ${USER_TZ_SHORT}</span>
+            ${ev.url ? ` · <a href="${ev.url}" target="_blank" style="color:#3b82f6">Sumber / Source ↗</a>` : ''}
+          </div>
+        </div>
+      </div>`;
+    });
+  });
+
+  const html = `<!DOCTYPE html>
+<html lang="${lang}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crisis Monitor — Snapshot ${ts}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0b0d;color:#ecedef;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.6;max-width:700px;margin:0 auto;padding:16px}
+.header{background:#111318;border:1px solid #252830;border-radius:10px;padding:16px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.lmark{width:36px;height:36px;background:#e03e3e;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.lname{font-size:16px;font-weight:600}
+.lsub{font-size:11px;color:#4e5060;text-transform:uppercase;letter-spacing:.07em}
+.snap-info{font-size:11px;color:#4e5060;font-family:monospace;margin-top:4px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.stat{background:#111318;border:1px solid #252830;border-radius:8px;padding:12px;text-align:center}
+.stat-n{font-size:24px;font-weight:700;font-family:monospace}
+.stat-l{font-size:10px;color:#8e9099;text-transform:uppercase;letter-spacing:.07em;margin-top:2px}
+.daysep{font-size:10px;color:#4e5060;letter-spacing:.08em;text-transform:uppercase;padding:14px 0 8px;border-bottom:1px solid #252830;margin-bottom:8px;font-family:monospace}
+.evc{background:#111318;border:1px solid #252830;border-radius:8px;padding:14px;margin-bottom:10px;display:flex;gap:12px}
+.evdot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.evmain{flex:1;min-width:0}
+.evbadges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}
+.bdg{font-size:10px;font-family:monospace;padding:2px 7px;border-radius:4px;font-weight:500}
+.neutral{background:#1e2028;color:#8e9099;border:1px solid #32353f}
+.evtitle{font-size:14px;font-weight:600;color:#ecedef;margin-bottom:6px;line-height:1.4}
+.evdesc{font-size:13px;color:#8e9099;line-height:1.6;margin-bottom:8px}
+.evfoot{font-size:11px;color:#4e5060;font-family:monospace}
+.footer{text-align:center;padding:24px 0 8px;font-size:11px;color:#4e5060;font-family:monospace}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="lmark">⚠</div>
+  <div>
+    <div class="lname">Crisis Monitor</div>
+    <div class="lsub">ID &amp; Global · Offline Snapshot</div>
+    <div class="snap-info">${lang==='id'?'Disimpan':'Saved'}: ${ts} ${USER_TZ_SHORT} · ${evs.length} ${lang==='id'?'kejadian':'events'}</div>
+  </div>
+</div>
+<div class="stats">
+  <div class="stat"><div class="stat-n" style="color:#e03e3e">${ALL.filter(e=>e.severity==='critical').length}</div><div class="stat-l">${lang==='id'?'Kritis':'Critical'}</div></div>
+  <div class="stat"><div class="stat-n" style="color:#d4860f">${ALL.filter(e=>e.severity==='warning').length}</div><div class="stat-l">${lang==='id'?'Waspada':'Warning'}</div></div>
+  <div class="stat"><div class="stat-n" style="color:#3b82f6">${ALL.length}</div><div class="stat-l">Total</div></div>
+</div>
+${evHTML}
+<div class="footer">crisis-monitor · snapshot ${ts} · ${window.location.hostname}</div>
+</body></html>`;
+
+  const blob = new Blob([html], {type:'text/html'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'crisis-monitor-' + new Date().toISOString().slice(0,16).replace('T','_').replace(':','') + '.html';
+  a.click();
 }
 
 // Handle browser back button
@@ -985,6 +1070,11 @@ window.addEventListener('popstate', function(e) {
     return;
   }
 });
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
 loadData();
 // Ensure correct height on initial load (mobile browser bar fix)
