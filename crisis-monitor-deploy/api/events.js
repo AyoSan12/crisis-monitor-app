@@ -6,49 +6,71 @@
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  res.setHeader('Cache-Control', 's-maxage=240, stale-while-revalidate=600');
 
-  const results = await Promise.allSettled([
-    fetchBMKG(),
-    fetchUSGS(),
-    fetchEONET(),
-    fetchReliefWeb(),
-    fetchGDACS(),
-    fetchWHO(),
-    fetchNOAA(),
-    fetchACLED(),
-    fetchPVMBG(),
-    fetchICRC(),
-    fetchCrisisGroup(),
-    fetchMSF(),
-    fetchBBCConflict(),
-    fetchReuters(),
-    fetchUNNews(),
-    fetchDW(),
-    fetchFrance24(),
-    fetchVOA(),
-    fetchRFERL(),
-    fetchMiddleEastEye(),
-    fetchHRW(),
-    fetchAmnesty(),
-    fetchBellingcat(),
-    fetchUNHCR(),
-    fetchUNOCHASituations(),
-    fetchKonflikIndonesia(),
-    fetchIndonesiaForeignPolicy(),
-    fetchIndonesiaBencana(),
-  ]);
+  // Semua sumber dijalankan paralel, tapi ada hard deadline 12 detik
+  // Sumber yang selesai dalam waktu itu akan diikutkan, sisanya dilewati
+  const DEADLINE = 12000; // 12 detik — sisakan buffer untuk Vercel overhead
 
-  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit','konflik_id','id_foreign','bnpb_gdacs'];
+  const fetchers = [
+    { key: 'bmkg',       fn: fetchBMKG },
+    { key: 'usgs',       fn: fetchUSGS },
+    { key: 'eonet',      fn: fetchEONET },
+    { key: 'reliefweb',  fn: fetchReliefWeb },
+    { key: 'gdacs',      fn: fetchGDACS },
+    { key: 'who',        fn: fetchWHO },
+    { key: 'noaa',       fn: fetchNOAA },
+    { key: 'acled',      fn: fetchACLED },
+    { key: 'pvmbg',      fn: fetchPVMBG },
+    { key: 'icrc',       fn: fetchICRC },
+    { key: 'crisisgroup',fn: fetchCrisisGroup },
+    { key: 'msf',        fn: fetchMSF },
+    { key: 'bbc',        fn: fetchBBCConflict },
+    { key: 'reuters',    fn: fetchReuters },
+    { key: 'un',         fn: fetchUNNews },
+    { key: 'dw',         fn: fetchDW },
+    { key: 'france24',   fn: fetchFrance24 },
+    { key: 'voa',        fn: fetchVOA },
+    { key: 'rferl',      fn: fetchRFERL },
+    { key: 'mee',        fn: fetchMiddleEastEye },
+    { key: 'hrw',        fn: fetchHRW },
+    { key: 'amnesty',    fn: fetchAmnesty },
+    { key: 'bellingcat', fn: fetchBellingcat },
+    { key: 'unhcr',      fn: fetchUNHCR },
+    { key: 'ocha_sit',   fn: fetchUNOCHASituations },
+    { key: 'konflik_id', fn: fetchKonflikIndonesia },
+    { key: 'id_foreign', fn: fetchIndonesiaForeignPolicy },
+    { key: 'bnpb_gdacs', fn: fetchIndonesiaBencana },
+  ];
+
+  const start = Date.now();
+
+  // Jalankan semua, wrap tiap satu dengan timeout deadline
+  const raceResults = await Promise.allSettled(
+    fetchers.map(({ key, fn }) =>
+      Promise.race([
+        fn().then(v => ({ key, v })),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('deadline')), DEADLINE - (Date.now() - start) - 500)
+        )
+      ])
+    )
+  );
+
   const sources = {};
-  keys.forEach((k, i) => {
-    sources[k] = results[i].status === 'fulfilled' ? 'ok' : (results[i].reason?.message || 'error');
+  const allEvents = [];
+
+  raceResults.forEach((r, i) => {
+    const key = fetchers[i].key;
+    if (r.status === 'fulfilled') {
+      sources[key] = 'ok';
+      allEvents.push(...(r.value.v || []));
+    } else {
+      sources[key] = r.reason?.message === 'deadline' ? 'timeout' : (r.reason?.message || 'error');
+    }
   });
 
-  const events = results
-    .filter(r => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-    .sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+  const events = allEvents.sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
 
   res.status(200).json({ events, updated: new Date().toISOString(), sources });
 };
@@ -1078,7 +1100,7 @@ async function fetchUNOCHASituations() {
 }
 
 // ============================================================
-async function fetchWithTimeout(url, options = {}, ms = 9000) {
+async function fetchWithTimeout(url, options = {}, ms = 6000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {

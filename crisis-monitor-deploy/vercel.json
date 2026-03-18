@@ -4,6 +4,14 @@
       "maxDuration": 25
     }
   },
+  "routes": [
+    { "src": "/api/events", "dest": "/api/events.js" },
+    { "src": "/sw.js", "dest": "/sw.js" },
+    { "src": "/manifest.json", "dest": "/manifest.json" },
+    { "src": "/icon-192.png", "dest": "/icon-192.png" },
+    { "src": "/icon-512.png", "dest": "/icon-512.png" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/manifest.json",
