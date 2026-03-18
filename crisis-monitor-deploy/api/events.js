@@ -184,19 +184,11 @@ async function fetchEONET() {
 // ReliefWeb (UN) — API resmi laporan krisis kemanusiaan
 // ============================================================
 async function fetchReliefWeb() {
-  // Try v1 API with profile=list (more permissive), fallback to RSS
-  const urls = [
-    'https://api.reliefweb.int/v1/reports?appname=crisismonitor&profile=list&limit=15&sort[]=date:desc&fields[include][]=title&fields[include][]=date&fields[include][]=source&fields[include][]=country&fields[include][]=disaster_type&fields[include][]=url_alias',
-    'https://api.reliefweb.int/v1/reports?appname=crisis_monitor_app&limit=15&sort[]=date:desc',
-  ];
-  let res, lastErr;
-  for (const u of urls) {
-    try {
-      res = await fetchWithTimeout(u, { headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0', 'Accept': 'application/json' } });
-      break;
-    } catch(e) { lastErr = e; }
-  }
-  if (!res) throw lastErr;
+  // ReliefWeb v1 GET — format tanpa brackets, lebih kompatibel
+  const res = await fetchWithTimeout(
+    'https://api.reliefweb.int/v1/reports?appname=crisis_monitor&limit=15&sort=date:desc&fields=title,date,source,country,disaster_type,url_alias',
+    { headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0 (open source)', 'Accept': 'application/json' } }
+  );
   const data = await res.json();
   const catMap = {
     'Flood':            { cat: 'bencana',   badge: 'BANJIR',     severity: 'warning'  },
@@ -566,51 +558,75 @@ async function fetchPVMBG() {
 // ============================================================
 async function fetchKonflikIndonesia() {
   const results = [];
+  const idKeywords = /indonesia|papua|jakarta|aceh|kalimantan|sulawesi|maluku|timor|kkb|tni|polri|teroris/i;
+  
+  // Ambil dari semua sumber yang sudah OK, filter yang ada kata Indonesia
+  const sources = [
+    { url: 'https://www.aljazeera.com/xml/rss/all.xml', name: 'Al Jazeera' },
+    { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', name: 'BBC News' },
+    { url: 'https://rss.dw.com/rdf/rss-en-asia', name: 'DW Asia' },
+    { url: 'https://www.voanews.com/api/zmbq_yrk_e', name: 'VOA News' },
+    { url: 'https://www.france24.com/en/rss', name: 'France24' },
+  ];
 
-  // 1. Al Jazeera filter Indonesia konflik (sudah confirmed working)
-  try {
-    const items = await fetchConflictRSS({
-      url: 'https://www.aljazeera.com/xml/rss/all.xml',
-      srcKey: 'konflik_id', srcName: 'Al Jazeera (ID)', badge: 'KONFLIK ID',
-      extraKeywords: ['indonesia','papua','jakarta','kalimantan','sulawesi','aceh','kkb','separatist','armed group'],
-      limit: 5
-    });
-    const idItems = items.filter(ev => /indonesia|papua|jakarta|aceh|kalimantan|sulawesi/i.test(ev.title_en+' '+(ev.desc_en||'')));
-    idItems.forEach(ev => { ev.region = 'id'; results.push(ev); });
-  } catch(e) {}
+  for (const src of sources) {
+    try {
+      const res = await fetchWithTimeout(src.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
+      });
+      const text = await res.text();
+      const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 40);
+      function extract(block, tag) {
+        const m = block.match(new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([^<]*)<\/${tag}>`));
+        return m ? cleanDesc(m[1] || m[2] || '') : '';
+      }
+      items.forEach((m, i) => {
+        const block = m[1];
+        const title = extract(block, 'title').slice(0, 200);
+        const desc  = extract(block, 'description').slice(0, 400);
+        // Filter: harus ada kata Indonesia dan terkait konflik/keamanan
+        if (!idKeywords.test(title + ' ' + desc)) return;
+        const conflictKw = /conflict|attack|killed|armed|military|troops|rebel|separatist|militant|bomb|shooting|violence|arrested|terror|weapon|war|fighting|operation|raid|clashes|hostage|Papua|KKB|TNI|Polri/i;
+        if (!conflictKw.test(title + ' ' + desc)) return;
+        const link = extract(block, 'link');
+        const pub  = extract(block, 'pubDate');
+        const dt   = pub ? new Date(pub) : new Date();
+        const safedt = isNaN(dt) ? new Date() : dt;
+        const tl   = title.toLowerCase();
+        const sev  = (tl.includes('killed')||tl.includes('attack')||tl.includes('bomb')) ? 'critical' : 'warning';
+        results.push({
+          id: `konflik_id-${src.name.replace(/\s/g,'')}-${i}-${safedt.getTime()}`,
+          datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
+          severity: sev, cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
+          title_id: title, title_en: title,
+          desc_id: desc || `Laporan konflik Indonesia dari ${src.name}.`,
+          desc_en: desc || `Indonesia conflict report from ${src.name}.`,
+          source: src.name, loc: 'Indonesia',
+          url: link || src.url, updates: [],
+        });
+      });
+    } catch(e) { continue; }
+  }
 
-  // 2. BBC News filter Indonesia
-  try {
-    const items = await fetchConflictRSS({
-      url: 'https://feeds.bbci.co.uk/news/world/rss.xml',
-      srcKey: 'konflik_id', srcName: 'BBC News (ID)', badge: 'KONFLIK ID',
-      extraKeywords: ['indonesia','papua','jakarta','aceh','kkb'],
-      limit: 5
-    });
-    const idItems = items.filter(ev => /indonesia|papua|jakarta|aceh/i.test(ev.title_en+' '+(ev.desc_en||'')));
-    idItems.forEach(ev => { ev.region = 'id'; results.push(ev); });
-  } catch(e) {}
-
-  // 3. ACLED Indonesia (jika API key tersedia)
+  // ACLED Indonesia jika key tersedia
   try {
     const key = process.env.ACLED_API_KEY;
     const email = process.env.ACLED_EMAIL;
     if (key && email) {
-      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const since = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0,10);
       const url = `https://api.acleddata.com/acled/read?key=${key}&email=${email}&country=Indonesia&event_date=${since}&event_date_where=>&limit=15&fields=event_date|event_type|actor1|location|notes|fatalities|admin1`;
       const res = await fetchWithTimeout(url);
       const data = await res.json();
-      (data?.data || []).forEach((ev, i) => {
+      (data?.data||[]).forEach((ev,i) => {
         const dt = new Date(ev.event_date);
-        const fatal = parseInt(ev.fatalities) || 0;
+        const fatal = parseInt(ev.fatalities)||0;
         results.push({
           id: `konflik_id-acled-${i}-${dt.getTime()}`,
           datetime: dt.toISOString(), date: toDateStr(dt), time: '00:00',
-          severity: fatal > 0 ? 'critical' : 'warning',
-          cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
+          severity: fatal>0?'critical':'warning', cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
           title_id: `${ev.event_type} — ${ev.location}, ${ev.admin1||'Indonesia'}`,
           title_en: `${ev.event_type} — ${ev.location}, ${ev.admin1||'Indonesia'}`,
-          desc_id: `${ev.notes||'–'}${fatal>0?` Korban jiwa: ${fatal}.`:''}`,
+          desc_id: `${ev.notes||'–'}${fatal>0?` Korban: ${fatal}.`:''}`,
           desc_en: `${ev.notes||'–'}${fatal>0?` Fatalities: ${fatal}.`:''}`,
           source: 'ACLED', loc: `${ev.location}, Indonesia`,
           url: 'https://acleddata.com', updates: [],
@@ -620,10 +636,11 @@ async function fetchKonflikIndonesia() {
   } catch(e) {}
 
   if (results.length === 0) throw new Error('Tidak ada data konflik Indonesia');
-  // Deduplicate by title
   const seen = new Set();
-  return results.filter(ev => { if(seen.has(ev.title_en)) return false; seen.add(ev.title_en); return true; })
-    .sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+  return results.filter(ev => {
+    if (seen.has(ev.title_en)) return false;
+    seen.add(ev.title_en); return true;
+  }).sort((a,b) => new Date(b.datetime)-new Date(a.datetime));
 }
 
 // ============================================================
@@ -632,71 +649,103 @@ async function fetchKonflikIndonesia() {
 // ============================================================
 async function fetchIndonesiaForeignPolicy() {
   const results = [];
+  // Filter berita dari media internasional tentang posisi/diplomasi Indonesia
+  const idDiploKeywords = /indonesia.{0,30}(peace|war|conflict|ukraine|russia|iran|israel|palestine|myanmar|asean|pbb|un|nato|ceasefire|mediat|diplomat|foreign|minister|prabowo|retno|sugiono)/i;
+  const altKeywords = /(prabowo|retno|sugiono|indonesia).{0,50}(war|peace|conflict|attack|iran|ukraine|israel|myanmar|sudan|asean|foreign policy|diplomac)/i;
 
-  // 1. Kementerian Luar Negeri RI — press release & pernyataan resmi
+  const sources = [
+    { url: 'https://www.aljazeera.com/xml/rss/all.xml', name: 'Al Jazeera' },
+    { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', name: 'BBC News' },
+    { url: 'https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml', name: 'UN News' },
+    { url: 'https://rss.dw.com/rdf/rss-en-asia', name: 'DW Asia' },
+    { url: 'https://www.voanews.com/api/zmbq_yrk_e', name: 'VOA News' },
+  ];
+
+  // Juga coba Kemlu RI
   try {
-    const res = await fetchWithTimeout('https://kemlu.go.id/portal/id/read/feed/rss', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
-    });
-    const text = await res.text();
-    const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
-    const keywords = ['perang','konflik','gencatan senjata','serangan','pasukan','militer','senjata','diplomatik','mediasi','perdamaian','sandera','pbb','nato','ukraina','iran','israel','palestina','myanmar','sudan','krisis','kemanusiaan','evakuasi'];
-    function extract(block, tag) {
-      const m = block.match(new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([^<]*)<\/${tag}>`));
-      return m ? cleanDesc(m[1] || m[2] || '') : '';
+    const kemluUrls = [
+      'https://kemlu.go.id/portal/id/read/feed/rss',
+      'https://kemlu.go.id/rss',
+    ];
+    for (const url of kemluUrls) {
+      try {
+        const res = await fetchWithTimeout(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
+        });
+        const text = await res.text();
+        if (!text.includes('<item>')) continue;
+        const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
+        const kwFilter = /perang|konflik|gencatan|serangan|militer|senjata|diplomatik|mediasi|perdamaian|ukraina|iran|israel|palestina|myanmar|sudan|rohingya|evakuasi|wni|pbb/i;
+        function extract(block, tag) {
+          const m = block.match(new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([^<]*)<\/${tag}>`));
+          return m ? cleanDesc(m[1] || m[2] || '') : '';
+        }
+        items.filter(m => kwFilter.test(m[1])).slice(0,6).forEach((m,i) => {
+          const block = m[1];
+          const title = extract(block,'title').slice(0,200);
+          const desc  = extract(block,'description').slice(0,400);
+          const link  = extract(block,'link');
+          const pub   = extract(block,'pubDate');
+          const dt    = pub ? new Date(pub) : new Date();
+          const safedt = isNaN(dt) ? new Date() : dt;
+          if (!title || title.length < 5) return;
+          results.push({
+            id: `id_foreign-kemlu-${i}-${safedt.getTime()}`,
+            datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
+            severity: 'info', cat: 'konflik', region: 'id', badge: 'KEMLU RI',
+            title_id: title, title_en: title,
+            desc_id: desc || 'Pernyataan resmi Kementerian Luar Negeri RI.',
+            desc_en: desc || 'Official statement from Indonesia Ministry of Foreign Affairs.',
+            source: 'Kemlu RI', loc: 'Indonesia',
+            url: link || 'https://kemlu.go.id', updates: [],
+          });
+        });
+        if (results.length > 0) break;
+      } catch(e) { continue; }
     }
-    items.filter(m => keywords.some(k => m[1].toLowerCase().includes(k)))
-      .slice(0, 6).forEach((m, i) => {
+  } catch(e) {}
+
+  for (const src of sources) {
+    try {
+      const res = await fetchWithTimeout(src.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
+      });
+      const text = await res.text();
+      const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 40);
+      function extract(block, tag) {
+        const m = block.match(new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([^<]*)<\/${tag}>`));
+        return m ? cleanDesc(m[1] || m[2] || '') : '';
+      }
+      items.forEach((m,i) => {
         const block = m[1];
-        const title = extract(block, 'title').slice(0, 200);
-        const desc  = extract(block, 'description').slice(0, 400);
-        const link  = extract(block, 'link');
-        const pub   = extract(block, 'pubDate');
+        const title = extract(block,'title').slice(0,200);
+        const desc  = extract(block,'description').slice(0,400);
+        if (!idDiploKeywords.test(title+' '+desc) && !altKeywords.test(title+' '+desc)) return;
+        const link  = extract(block,'link');
+        const pub   = extract(block,'pubDate');
         const dt    = pub ? new Date(pub) : new Date();
         const safedt = isNaN(dt) ? new Date() : dt;
         if (!title || title.length < 5) return;
         results.push({
-          id: `kemlu-${i}-${safedt.getTime()}`,
+          id: `id_foreign-${src.name.replace(/\s/g,'')}-${i}-${safedt.getTime()}`,
           datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
-          severity: 'info', cat: 'konflik', region: 'id', badge: 'KEMLU RI',
+          severity: 'info', cat: 'konflik', region: 'id', badge: 'DIPLOMASI RI',
           title_id: title, title_en: title,
-          desc_id: desc || 'Pernyataan resmi Kementerian Luar Negeri Republik Indonesia.',
-          desc_en: desc || 'Official statement from the Ministry of Foreign Affairs of Indonesia.',
-          source: 'Kemlu RI', loc: 'Indonesia',
-          url: link || 'https://kemlu.go.id',
-          updates: [],
+          desc_id: desc || `Laporan diplomasi Indonesia dari ${src.name}.`,
+          desc_en: desc || `Indonesia diplomacy report from ${src.name}.`,
+          source: src.name, loc: 'Indonesia',
+          url: link || src.url, updates: [],
         });
       });
-  } catch(e) {}
-
-  // 2. Filter berita internasional tentang kebijakan Indonesia
-  try {
-    const items = await fetchConflictRSS({
-      url: 'https://www.aljazeera.com/xml/rss/all.xml',
-      srcKey: 'id_foreign', srcName: 'Al Jazeera (RI Luar Negeri)', badge: 'DIPLOMASI RI',
-      extraKeywords: ['indonesia foreign','indonesia peace','indonesia mediat','indonesia diplomat','indonesia war','indonesia troops','indonesia military','indonesia ukraine','indonesia iran','indonesia myanmar','indonesia un','indonesia asean'],
-      limit: 5
-    });
-    const filtered = items.filter(ev => /indonesia/i.test(ev.title_en+' '+(ev.desc_en||'')));
-    filtered.forEach(ev => { ev.region = 'id'; ev.badge = 'DIPLOMASI RI'; results.push(ev); });
-  } catch(e) {}
-
-  // 3. UN News filter Indonesia
-  try {
-    const items = await fetchConflictRSS({
-      url: 'https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml',
-      srcKey: 'id_foreign', srcName: 'UN News (RI)', badge: 'DIPLOMASI RI',
-      extraKeywords: ['indonesia'],
-      limit: 5
-    });
-    const filtered = items.filter(ev => /indonesia/i.test(ev.title_en+' '+(ev.desc_en||'')));
-    filtered.forEach(ev => { ev.region = 'id'; ev.badge = 'DIPLOMASI RI'; results.push(ev); });
-  } catch(e) {}
+    } catch(e) { continue; }
+  }
 
   if (results.length === 0) throw new Error('Tidak ada data kebijakan luar negeri Indonesia');
   const seen = new Set();
-  return results.filter(ev => { if(seen.has(ev.title_en)) return false; seen.add(ev.title_en); return true; })
-    .sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+  return results.filter(ev => {
+    if (seen.has(ev.title_en)) return false;
+    seen.add(ev.title_en); return true;
+  }).sort((a,b) => new Date(b.datetime)-new Date(a.datetime)).slice(0,15);
 }
 
 // ============================================================
