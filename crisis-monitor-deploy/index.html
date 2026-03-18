@@ -455,6 +455,19 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
         <div class="dsrc-row"><span>WHO</span><span class="dsrc-bdg loading" id="ds-who">–</span></div>
         <div class="dsrc-row"><span>NOAA / NHC</span><span class="dsrc-bdg loading" id="ds-noaa">–</span></div>
         <div class="dsrc-row"><span>PVMBG</span><span class="dsrc-bdg loading" id="ds-pvmbg">–</span></div>
+        <div class="dsrc-row"><span>BBC News</span><span class="dsrc-bdg loading" id="ds-bbc">–</span></div>
+        <div class="dsrc-row"><span>Reuters</span><span class="dsrc-bdg loading" id="ds-reuters">–</span></div>
+        <div class="dsrc-row"><span>UN News</span><span class="dsrc-bdg loading" id="ds-un">–</span></div>
+        <div class="dsrc-row"><span>DW (Deutsche Welle)</span><span class="dsrc-bdg loading" id="ds-dw">–</span></div>
+        <div class="dsrc-row"><span>France24</span><span class="dsrc-bdg loading" id="ds-france24">–</span></div>
+        <div class="dsrc-row"><span>VOA News</span><span class="dsrc-bdg loading" id="ds-voa">–</span></div>
+        <div class="dsrc-row"><span>RFE/RL</span><span class="dsrc-bdg loading" id="ds-rferl">–</span></div>
+        <div class="dsrc-row"><span>Middle East Eye</span><span class="dsrc-bdg loading" id="ds-mee">–</span></div>
+        <div class="dsrc-row"><span>Human Rights Watch</span><span class="dsrc-bdg loading" id="ds-hrw">–</span></div>
+        <div class="dsrc-row"><span>Amnesty Intl</span><span class="dsrc-bdg loading" id="ds-amnesty">–</span></div>
+        <div class="dsrc-row"><span>Bellingcat</span><span class="dsrc-bdg loading" id="ds-bellingcat">–</span></div>
+        <div class="dsrc-row"><span>UNHCR</span><span class="dsrc-bdg loading" id="ds-unhcr">–</span></div>
+        <div class="dsrc-row"><span>OCHA Situations</span><span class="dsrc-bdg loading" id="ds-ocha_sit">–</span></div>
         <div class="dsrc-row"><span>ACLED</span><span class="dsrc-bdg loading" id="ds-acled">–</span></div>
       </div>
     </div>
@@ -490,7 +503,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 
 <script>
 let ALL=[],lang='id',cat='all',region='all',q='',page=1,selId=null,lastUpdated=null;
-const PER=10;
+const PER=10; // desktop pagination
+const MOB_BATCH=20; // mobile infinite scroll batch size
+let mobLoaded=0, mobObserver=null;
+
+/* ===== TIMEZONE AUTO-DETECT ===== */
+const USER_TZ=Intl.DateTimeFormat().resolvedOptions().timeZone;
+const USER_TZ_SHORT=(()=>{try{const p=new Intl.DateTimeFormat('en',{timeZoneName:'short',timeZone:USER_TZ}).formatToParts(new Date());return p.find(x=>x.type==='timeZoneName')?.value||'Local';}catch(e){return'Local';}})();
+function fmtLocalTime(iso){try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',timeZone:USER_TZ,hour12:false});}catch(e){return'--:--';}}
 
 /* ===== DATA ===== */
 async function loadData(){
@@ -509,7 +529,7 @@ async function loadData(){
     const sk=document.getElementById('m-skel');if(sk)sk.style.display='none';
     const mt=document.getElementById('m-tl');if(mt)mt.style.display='block';
     const dt=document.getElementById('d-tl');if(dt)dt.style.display='block';
-    updStats();updCounts();render();
+    mobLoaded=0;updStats();updCounts();render();
   }catch(e){
     const sk=document.getElementById('m-skel');
     if(sk)sk.innerHTML='<div class="empty-wrap"><div class="empty-ic">⚠</div><div class="empty-tx">Gagal memuat data.<br>Periksa koneksi & muat ulang.</div></div>';
@@ -529,7 +549,7 @@ function filtered(){
 }
 function groupByDate(evs){const m={};evs.forEach(ev=>(m[ev.date]=m[ev.date]||[]).push(ev));return Object.entries(m).sort((a,b)=>b[0].localeCompare(a[0]));}
 function fmtDate(d){const dt=new Date(d+'T00:00:00');return lang==='id'?dt.toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'}):dt.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}
-function fmtUpd(){if(!lastUpdated)return'–';return new Date(lastUpdated).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta',hour12:false})+' WIB';}
+function fmtUpd(){if(!lastUpdated)return'–';return new Date(lastUpdated).toLocaleString([],{hour:'2-digit',minute:'2-digit',timeZone:USER_TZ,hour12:false})+' '+USER_TZ_SHORT;}
 
 /* ===== STATS ===== */
 function updStats(){
@@ -545,8 +565,10 @@ function updCounts(){
 
 /* ===== RENDER ===== */
 function evHTML(ev,i){
+  // Use user local timezone for display
+  const localTime=fmtLocalTime(ev.datetime);
   return`<div class="evc${ev.id===selId?' sel':''}" onclick="selectEv('${ev.id}')" style="animation-delay:${i*.025}s">
-    <div class="evleft"><div class="evtime">${ev.time}<br><span style="font-size:9px">${ev.region==='id'?'WIB':'UTC'}</span></div><div class="evdot ${ev.severity}"></div></div>
+    <div class="evleft"><div class="evtime">${localTime}<br><span style="font-size:9px">${USER_TZ_SHORT}</span></div><div class="evdot ${ev.severity}"></div></div>
     <div class="evmain">
       <div class="evbadges"><span class="bdg ${ev.severity}">${ev.badge}</span><span class="bdg neutral">${ev.source}</span></div>
       <div class="evtitle">${T(ev,'title')}</div>
@@ -556,10 +578,10 @@ function evHTML(ev,i){
     <div class="evchev"><svg width="14" height="14"><use href="#ico-chevron"/></svg></div>
   </div>`;
 }
-function tlHTML(paged){
-  if(!paged.length)return`<div class="empty-wrap"><div class="empty-ic">⊘</div><div class="empty-tx">${lang==='id'?'Tidak ada kejadian':'No events found'}</div></div>`;
+function tlHTML(evList){
+  if(!evList.length)return`<div class="empty-wrap"><div class="empty-ic">⊘</div><div class="empty-tx">${lang==='id'?'Tidak ada kejadian':'No events found'}</div></div>`;
   let h='',gi=0;
-  groupByDate(paged).forEach(([date,evs])=>{
+  groupByDate(evList).forEach(([date,evs])=>{
     h+=`<div class="daysep">${fmtDate(date)}<div class="daysep-line"></div></div>`;
     evs.forEach((ev,i)=>{h+=evHTML(ev,gi++);});
   });
@@ -569,38 +591,91 @@ function pgHTML(total){
   if(total<=1)return'';
   let h=`<div class="pg-bar"><button class="pgb" onclick="goPage(${page-1})" ${page===1?'disabled':''}>‹</button>`;
   const s=Math.max(1,page-2),e=Math.min(total,page+2);
-  if(s>1)h+=`<button class="pgb" onclick="goPage(1)">1</button>${s>2?'<span class="pg-info">…</span>':''}`;
+  if(s>1)h+=`<button class="pgb" onclick="goPage(1)">1</button>${s>2?'<span class="pg-info">…</span>':''}`; 
   for(let i=s;i<=e;i++)h+=`<button class="pgb${i===page?' cur':''}" onclick="goPage(${i})">${i}</button>`;
   if(e<total)h+=`${e<total-1?'<span class="pg-info">…</span>':''}<button class="pgb" onclick="goPage(${total})">${total}</button>`;
   h+=`<button class="pgb" onclick="goPage(${page+1})" ${page===total?'disabled':''}>›</button></div>`;
   return h;
 }
-function render(){
-  const evs=filtered(),total=Math.max(1,Math.ceil(evs.length/PER));
-  if(page>total)page=1;
-  const paged=evs.slice((page-1)*PER,page*PER);
-  const tH=tlHTML(paged),pH=pgHTML(total);
-  [['m-tl','m-pg'],['d-tl','d-pg']].forEach(([ti,pi])=>{
-    const te=document.getElementById(ti);if(te)te.innerHTML=tH;
-    const pe=document.getElementById(pi);if(pe)pe.innerHTML=pH;
-  });
-  const labels={all:lang==='id'?'Semua kejadian':'All events',gempa:lang==='id'?'Gempa & Tsunami':'Earthquakes',bencana:lang==='id'?'Bencana Alam':'Natural Disasters',konflik:lang==='id'?'Konflik & Perang':'Conflict & War',cuaca:lang==='id'?'Cuaca Ekstrem':'Extreme Weather',wabah:lang==='id'?'Wabah':'Outbreaks',kebakaran:lang==='id'?'Kebakaran':'Wildfires'};
-  const ti=document.getElementById('d-title');if(ti)ti.textContent=labels[cat]||labels['all'];
-  const si=document.getElementById('d-sub');if(si)si.textContent=`${evs.length} kejadian · ${fmtUpd()} · hal ${page}/${total}`;
+
+/* --- Mobile infinite scroll --- */
+function setupMobInfinite(evs){
+  // disconnect old observer
+  if(mobObserver){mobObserver.disconnect();mobObserver=null;}
+  const tl=document.getElementById('m-tl');
+  const pg=document.getElementById('m-pg');
+  if(!tl)return;
+  if(!evs.length){tl.innerHTML=`<div class="empty-wrap"><div class="empty-ic">⊘</div><div class="empty-tx">${lang==='id'?'Tidak ada kejadian':'No events found'}</div></div>`;pg.innerHTML='';return;}
+
+  // Render first batch
+  const renderBatch=(upTo)=>{
+    const slice=evs.slice(0,upTo);
+    tl.innerHTML=tlHTML(slice);
+    // Show load-more indicator if more items exist
+    if(upTo<evs.length){
+      pg.innerHTML='<div id="mob-sentinel" style="height:40px;display:flex;align-items:center;justify-content:center"><div style="font-family:var(--fm);font-size:10px;color:var(--text3)">Memuat lebih...</div></div>';
+      // Observer watches the sentinel
+      const sentinel=document.getElementById('mob-sentinel');
+      if(sentinel){
+        mobObserver=new IntersectionObserver(entries=>{
+          if(entries[0].isIntersecting){
+            mobLoaded=Math.min(mobLoaded+MOB_BATCH,evs.length);
+            renderBatch(mobLoaded);
+          }
+        },{rootMargin:'200px'});
+        mobObserver.observe(sentinel);
+      }
+    } else {
+      // All loaded — show count summary
+      pg.innerHTML=`<div style="padding:16px;text-align:center;font-family:var(--fm);font-size:10px;color:var(--text3)">${evs.length} kejadian dimuat</div>`;
+    }
+  };
+  mobLoaded=Math.min(MOB_BATCH,evs.length);
+  renderBatch(mobLoaded);
 }
-function goPage(p){page=p;render();[['m-scroll'],['d-scroll']].forEach(([id])=>{const e=document.getElementById(id);if(e)e.scrollTo(0,0);});}
+
+function render(){
+  const evs=filtered();
+  const isMob=window.innerWidth<860;
+
+  if(isMob){
+    // Mobile: infinite scroll, no pagination
+    setupMobInfinite(evs);
+    // Desktop tl hidden on mobile but update anyway for resize
+    const dt=document.getElementById('d-tl');
+    const dp=document.getElementById('d-pg');
+    if(dt)dt.innerHTML='';if(dp)dp.innerHTML='';
+  } else {
+    // Desktop: pagination
+    if(mobObserver){mobObserver.disconnect();mobObserver=null;}
+    const total=Math.max(1,Math.ceil(evs.length/PER));
+    if(page>total)page=1;
+    const paged=evs.slice((page-1)*PER,page*PER);
+    const tH=tlHTML(paged),pH=pgHTML(total);
+    // Mobile tl: show all for desktop resize case
+    const mt=document.getElementById('m-tl');const mp=document.getElementById('m-pg');
+    if(mt)mt.innerHTML=tH;if(mp)mp.innerHTML=pH;
+    const dt=document.getElementById('d-tl');const dp=document.getElementById('d-pg');
+    if(dt)dt.innerHTML=tH;if(dp)dp.innerHTML=pH;
+    const labels={all:lang==='id'?'Semua kejadian':'All events',gempa:lang==='id'?'Gempa & Tsunami':'Earthquakes',bencana:lang==='id'?'Bencana Alam':'Natural Disasters',konflik:lang==='id'?'Konflik & Perang':'Conflict & War',cuaca:lang==='id'?'Cuaca Ekstrem':'Extreme Weather',wabah:lang==='id'?'Wabah':'Outbreaks',kebakaran:lang==='id'?'Kebakaran':'Wildfires'};
+    const ti=document.getElementById('d-title');if(ti)ti.textContent=labels[cat]||labels['all'];
+    const si=document.getElementById('d-sub');if(si)si.textContent=`${evs.length} kejadian · ${fmtUpd()} · hal ${page}/${total}`;
+  }
+}
+function goPage(p){page=p;render();const e=document.getElementById('d-scroll');if(e)e.scrollTo(0,0);}
 
 /* ===== DETAIL ===== */
 function detHTML(ev,isMob){
   const sl={critical:lang==='id'?'KRITIS':'CRITICAL',warning:lang==='id'?'WASPADA':'WARNING',info:'INFO'};
   const Tx=f=>lang==='id'?ev[f+'_id']:ev[f+'_en'];
+  const localTime=fmtLocalTime(ev.datetime);
   if(isMob){
     let upd='';
-    if(ev.updates?.length)upd=`<div style="margin-bottom:16px"><div class="det-sum-title">${lang==='id'?'Pembaruan':'Updates'}</div><div class="det-upd-list">${ev.updates.map(u=>`<div class="det-upd ${u.border||''}"><div class="det-upd-t">${u.time}</div><div class="det-upd-x">${u.text}</div></div>`).join('')}</div></div>`;
+    if(ev.updates?.length)upd=`<div style="margin-bottom:16px"><div class="det-sum-title">${lang==='id'?'Pembaruan':'Updates'}</div><div class="det-upd-list">${ev.updates.map(u=>`<div class="det-upd ${u.border||''}" ><div class="det-upd-t">${u.time}</div><div class="det-upd-x">${u.text}</div></div>`).join('')}</div></div>`;
     return`<div class="evbadges"><span class="bdg ${ev.severity}">${sl[ev.severity]}</span><span class="bdg neutral">${ev.badge}</span></div>
     <div class="det-title-lg">${Tx('title')}</div>
     <div class="det-meta-card">
-      <div class="det-meta-row"><div class="det-meta-k">${lang==='id'?'Waktu':'Time'}</div><div class="det-meta-v">${ev.time} ${ev.region==='id'?'WIB':'UTC'}</div></div>
+      <div class="det-meta-row"><div class="det-meta-k">${lang==='id'?'Waktu':'Time'}</div><div class="det-meta-v">${localTime} ${USER_TZ_SHORT}</div></div>
       <div class="det-meta-row"><div class="det-meta-k">${lang==='id'?'Lokasi':'Location'}</div><div class="det-meta-v">${ev.loc}</div></div>
       <div class="det-meta-row"><div class="det-meta-k">${lang==='id'?'Sumber':'Source'}</div><div class="det-meta-v">${ev.source}</div></div>
       <div class="det-meta-row"><div class="det-meta-k">${lang==='id'?'Wilayah':'Region'}</div><div class="det-meta-v">${ev.region==='id'?'Indonesia':'Global'}</div></div>
@@ -612,11 +687,11 @@ function detHTML(ev,isMob){
     </a>`;
   }else{
     let upd='';
-    if(ev.updates?.length)upd=`<div class="ddiv"></div><div class="ddet-sec">${lang==='id'?'Pembaruan':'Updates'}</div><div class="ddet-upds">${ev.updates.map(u=>`<div class="ddet-upd ${u.border||''}"><div class="ddet-upd-t">${u.time}</div><div class="ddet-upd-x">${u.text}</div></div>`).join('')}</div>`;
+    if(ev.updates?.length)upd=`<div class="ddiv"></div><div class="ddet-sec">${lang==='id'?'Pembaruan':'Updates'}</div><div class="ddet-upds">${ev.updates.map(u=>`<div class="ddet-upd ${u.border||''}" ><div class="ddet-upd-t">${u.time}</div><div class="ddet-upd-x">${u.text}</div></div>`).join('')}</div>`;
     return`<div><span class="bdg ${ev.severity}">${sl[ev.severity]}</span> <span class="bdg neutral" style="margin-left:3px">${ev.badge}</span></div>
     <div class="ddet-title">${Tx('title')}</div>
     <div class="ddet-grid">
-      <div class="ddk">${lang==='id'?'Waktu':'Time'}</div><div class="ddv">${ev.time} · ${fmtDate(ev.date)}</div>
+      <div class="ddk">${lang==='id'?'Waktu':'Time'}</div><div class="ddv">${localTime} ${USER_TZ_SHORT} · ${fmtDate(ev.date)}</div>
       <div class="ddk">${lang==='id'?'Lokasi':'Location'}</div><div class="ddv">${ev.loc}</div>
       <div class="ddk">${lang==='id'?'Sumber':'Source'}</div><div class="ddv">${ev.source}</div>
       <div class="ddk">${lang==='id'?'Wilayah':'Region'}</div><div class="ddv">${ev.region==='id'?'Indonesia':'Global'}</div>
@@ -630,15 +705,16 @@ function detHTML(ev,isMob){
   }
 }
 function selectEv(id){
-  selId=id;const ev=ALL.find(e=>e.id===id);if(!ev)return;render();
+  selId=id;const ev=ALL.find(e=>e.id===id);if(!ev)return;
   if(window.innerWidth<860){
     const sh=document.getElementById('detsheet'),bd=document.getElementById('det-sh-body');
     bd.innerHTML=detHTML(ev,true);bd.scrollTop=0;sh.classList.add('open');
   }else{
+    render();
     const bd=document.getElementById('d-det');bd.innerHTML=detHTML(ev,false);bd.scrollTop=0;
   }
 }
-function closeDet(){document.getElementById('detsheet').classList.remove('open');selId=null;render();}
+function closeDet(){document.getElementById('detsheet').classList.remove('open');selId=null;}
 function closeDDet(){selId=null;render();document.getElementById('d-det').innerHTML=`<div class="ddet-empty"><div class="ddet-empty-ic">⊙</div><div class="ddet-empty-tx">${lang==='id'?'Pilih kejadian<br>untuk melihat detail':'Select an event<br>to view details'}</div></div>`;}
 
 /* ===== DRAWER ===== */
@@ -665,18 +741,18 @@ function closeDrawer(){document.getElementById('drawer').classList.remove('open'
 
 /* ===== CONTROLS ===== */
 function setCat(c,el,ctx){
-  cat=c;page=1;
+  cat=c;page=1;mobLoaded=0;
   if(ctx==='mob'||ctx==='drawer'){document.querySelectorAll('#m-fchips .fchip').forEach(x=>x.classList.remove('active'));if(el?.closest?.('.fscroll'))el.classList.add('active');}
   if(ctx==='desk'){document.querySelectorAll('#d-cats .dcat').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
   updCounts();render();
 }
 function setRegion(r,el){
-  region=r;page=1;
+  region=r;page=1;mobLoaded=0;
   document.querySelectorAll('.drbtn').forEach(x=>x.classList.remove('active'));
   if(el?.classList?.contains('drbtn'))el.classList.add('active');
   updCounts();render();
 }
-function onSearch(ctx){q=document.getElementById(ctx==='mob'?'m-srch':'d-srch').value;page=1;render();}
+function onSearch(ctx){q=document.getElementById(ctx==='mob'?'m-srch':'d-srch').value;page=1;mobLoaded=0;render();}
 function setLang(l,el,ctx){
   lang=l;
   if(ctx==='mob')document.querySelectorAll('.ltog .lbtn').forEach(x=>x.classList.remove('active'));
@@ -686,9 +762,13 @@ function setLang(l,el,ctx){
 }
 function toggleSrch(){const b=document.getElementById('srchbar');if(b.classList.toggle('show'))document.getElementById('m-srch').focus();}
 
+// Handle resize between mobile/desktop
+window.addEventListener('resize',()=>render());
+
 /* ===== CLOCK ===== */
 function tick(){
-  const t=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta',hour12:false})+' WIB';
+  // Show user local time in topbar
+  const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',timeZone:USER_TZ,hour12:false})+' '+USER_TZ_SHORT;
   ['m-ltime','d-ltime'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=t;});
 }
 setInterval(tick,1000);tick();

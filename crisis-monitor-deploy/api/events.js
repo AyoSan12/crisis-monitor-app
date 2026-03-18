@@ -21,9 +21,22 @@ module.exports = async function handler(req, res) {
     fetchICRC(),
     fetchCrisisGroup(),
     fetchMSF(),
+    fetchBBCConflict(),
+    fetchReuters(),
+    fetchUNNews(),
+    fetchDW(),
+    fetchFrance24(),
+    fetchVOA(),
+    fetchRFERL(),
+    fetchMiddleEastEye(),
+    fetchHRW(),
+    fetchAmnesty(),
+    fetchBellingcat(),
+    fetchUNHCR(),
+    fetchUNOCHASituations(),
   ]);
 
-  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf'];
+  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit'];
   const sources = {};
   keys.forEach((k, i) => {
     sources[k] = results[i].status === 'fulfilled' ? 'ok' : (results[i].reason?.message || 'error');
@@ -572,7 +585,230 @@ async function fetchACLED() {
 }
 
 // ============================================================
-// UTILS
+// Helpers shared by news RSS fetchers
+// ============================================================
+function makeNewsExtractor() {
+  return function extract(block, tag) {
+    const m = block.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`));
+    return m ? (m[1] || m[2] || '').trim() : '';
+  };
+}
+async function fetchConflictRSS({ url, srcKey, srcName, badge, extraKeywords=[], allItems=false, limit=10 }) {
+  const keywords = ['war','conflict','attack','strike','killed','offensive','troops','ceasefire','missile','bombing','airstrike','military','invasion','hostage','siege','civilian','casualties','fighting','battle','gunfire','explosion','occupation','drone','rebel','coup','protest','unrest','violence','armed',...extraKeywords];
+  const res = await fetchWithTimeout(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, application/xml, text/xml, */*' }
+  });
+  const text = await res.text();
+  const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 40);
+  const extract = makeNewsExtractor();
+  const filtered = allItems ? items : items.filter(m => keywords.some(k => m[1].toLowerCase().includes(k)));
+  return filtered.slice(0, limit).map((m, i) => {
+    const block = m[1];
+    const title = extract(block, 'title');
+    const desc  = extract(block, 'description').replace(/<[^>]*>/g, '').replace(/&[a-z]+;/g,'').trim().slice(0, 400);
+    const link  = extract(block, 'link');
+    const pub   = extract(block, 'pubDate') || extract(block, 'dc:date');
+    const dt    = pub ? new Date(pub) : new Date();
+    const safedt = isNaN(dt) ? new Date() : dt;
+    const tl    = title.toLowerCase();
+    const severity = (tl.includes('killed')||tl.includes('attack')||tl.includes('airstrike')||tl.includes('bombing')||tl.includes('massacre')||tl.includes('explosion')) ? 'critical' : 'warning';
+    if (!title) return null;
+    return {
+      id: `${srcKey}-${i}-${safedt.getTime()}`,
+      datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
+      severity, cat: 'konflik', region: 'global', badge,
+      title_id: title, title_en: title,
+      desc_id: desc || `Laporan dari ${srcName}.`,
+      desc_en: desc || `Report from ${srcName}.`,
+      source: srcName, loc: 'Global',
+      url: link || url,
+      updates: [],
+    };
+  }).filter(Boolean);
+}
+
+// ============================================================
+// BBC News World
+// ============================================================
+async function fetchBBCConflict() {
+  return fetchConflictRSS({ url: 'https://feeds.bbci.co.uk/news/world/rss.xml', srcKey: 'bbc', srcName: 'BBC News', badge: 'KONFLIK' });
+}
+
+// ============================================================
+// Reuters World News
+// ============================================================
+async function fetchReuters() {
+  return fetchConflictRSS({ url: 'https://feeds.reuters.com/reuters/worldNews', srcKey: 'reuters', srcName: 'Reuters', badge: 'KONFLIK' });
+}
+
+// ============================================================
+// UN News — Peace & Security
+// ============================================================
+async function fetchUNNews() {
+  return fetchConflictRSS({ url: 'https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml', srcKey: 'un', srcName: 'UN News', badge: 'PBB', allItems: true, limit: 8 });
+}
+
+// ============================================================
+// Deutsche Welle (DW) — German public broadcaster, multiple regions
+// ============================================================
+async function fetchDW() {
+  const urls = [
+    'https://rss.dw.com/rdf/rss-en-world',
+    'https://rss.dw.com/rdf/rss-en-middleeast',
+    'https://rss.dw.com/rdf/rss-en-africa',
+  ];
+  const all = [];
+  for (const url of urls) {
+    try {
+      const items = await fetchConflictRSS({ url, srcKey: 'dw', srcName: 'DW', badge: 'KONFLIK', limit: 5 });
+      all.push(...items);
+    } catch(e) { /* continue */ }
+  }
+  // deduplicate by title
+  const seen = new Set();
+  return all.filter(ev => { if(seen.has(ev.title_en)){return false;} seen.add(ev.title_en);return true; }).slice(0, 12);
+}
+
+// ============================================================
+// France24 — French public broadcaster (EN feed)
+// ============================================================
+async function fetchFrance24() {
+  return fetchConflictRSS({ url: 'https://www.france24.com/en/rss', srcKey: 'france24', srcName: 'France24', badge: 'KONFLIK' });
+}
+
+// ============================================================
+// Voice of America (VOA) — US gov broadcaster, covers global conflicts
+// ============================================================
+async function fetchVOA() {
+  const urls = [
+    'https://www.voanews.com/api/zmbq_yrk_e',   // World
+    'https://www.voanews.com/api/zqkovpv$_ei',   // Middle East
+  ];
+  const all = [];
+  for (const url of urls) {
+    try {
+      const items = await fetchConflictRSS({ url, srcKey: 'voa', srcName: 'VOA News', badge: 'KONFLIK', limit: 6 });
+      all.push(...items);
+    } catch(e) {}
+  }
+  const seen = new Set();
+  return all.filter(ev=>{ if(seen.has(ev.title_en))return false;seen.add(ev.title_en);return true;}).slice(0,10);
+}
+
+// ============================================================
+// Radio Free Europe / Radio Liberty (RFE/RL)
+// Covers Russia, Central Asia, Iran, Eastern Europe conflicts
+// ============================================================
+async function fetchRFERL() {
+  const urls = [
+    'https://www.rferl.org/api/zcriqrr_yut',     // Newsline
+    'https://www.rferl.org/api/z$yivopq_k',      // Latest
+  ];
+  const all = [];
+  for (const url of urls) {
+    try {
+      const items = await fetchConflictRSS({ url, srcKey: 'rferl', srcName: 'RFE/RL', badge: 'KONFLIK', limit: 6,
+        extraKeywords: ['russia','ukraine','belarus','caucasus','chechnya','georgia','moldova','tajikistan','kyrgyzstan','iran','afghanistan'] });
+      all.push(...items);
+    } catch(e) {}
+  }
+  const seen = new Set();
+  return all.filter(ev=>{ if(seen.has(ev.title_en))return false;seen.add(ev.title_en);return true;}).slice(0,10);
+}
+
+// ============================================================
+// Middle East Eye — Independent ME/Africa coverage
+// ============================================================
+async function fetchMiddleEastEye() {
+  return fetchConflictRSS({ url: 'https://www.middleeasteye.net/rss', srcKey: 'mee', srcName: 'Middle East Eye', badge: 'KONFLIK',
+    extraKeywords: ['israel','palestine','gaza','west bank','lebanon','syria','iraq','yemen','iran','saudi','egypt','libya','sudan','morocco'] });
+}
+
+// ============================================================
+// Human Rights Watch — Laporan pelanggaran HAM di zona konflik
+// ============================================================
+async function fetchHRW() {
+  return fetchConflictRSS({ url: 'https://www.hrw.org/rss.xml', srcKey: 'hrw', srcName: 'Human Rights Watch', badge: 'HAM',
+    extraKeywords: ['human rights','detention','torture','executions','abuses','massacre','atrocity','war crimes','disappearances'],
+    allItems: false, limit: 8 });
+}
+
+// ============================================================
+// Amnesty International — Laporan HAM global
+// ============================================================
+async function fetchAmnesty() {
+  const urls = [
+    'https://www.amnesty.org/en/latest/news/rss/',
+    'https://www.amnesty.org/en/feed/',
+  ];
+  for (const url of urls) {
+    try {
+      return await fetchConflictRSS({ url, srcKey: 'amnesty', srcName: 'Amnesty Intl', badge: 'HAM',
+        extraKeywords: ['human rights','torture','detention','execution','war crimes','armed conflict','civilian','refugee'],
+        limit: 8 });
+    } catch(e) { continue; }
+  }
+  throw new Error('Amnesty RSS tidak tersedia');
+}
+
+// ============================================================
+// Bellingcat — Investigasi open-source: konflik, senjata, kejahatan perang
+// ============================================================
+async function fetchBellingcat() {
+  return fetchConflictRSS({ url: 'https://www.bellingcat.com/feed/', srcKey: 'bellingcat', srcName: 'Bellingcat', badge: 'INVESTIGASI',
+    extraKeywords: ['ukraine','russia','syria','iran','military','weapons','satellite','osint','war crimes','airstrike','evidence'],
+    allItems: false, limit: 6 });
+}
+
+// ============================================================
+// UNHCR — Data pengungsi akibat konflik & bencana
+// ============================================================
+async function fetchUNHCR() {
+  return fetchConflictRSS({ url: 'https://www.unhcr.org/rss/news.xml', srcKey: 'unhcr', srcName: 'UNHCR', badge: 'PENGUNGSI',
+    extraKeywords: ['refugee','displacement','fleeing','conflict','persecution','asylum','stateless','return'],
+    allItems: false, limit: 8 });
+}
+
+// ============================================================
+// OCHA Situations — Update situasi kemanusiaan per konflik
+// ============================================================
+async function fetchUNOCHASituations() {
+  // ReliefWeb: laporan krisis & konflik terbaru dengan filter konflik
+  const body = JSON.stringify({
+    preset: 'latest', limit: 10,
+    filter: { operator: 'OR', conditions: [
+      { field: 'disaster_type.name', value: 'Conflict' },
+      { field: 'theme.name', value: 'Peacekeeping and Peacebuilding' },
+    ]},
+    fields: { include: ['title','date','source','country','url_alias','body-html'] },
+    sort: ['date:desc'],
+  });
+  const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
+    body,
+  });
+  const data = await res.json();
+  return (data?.data || []).map(item => {
+    const f = item.fields;
+    const dt = f.date?.created ? new Date(f.date.created) : new Date();
+    const country = f.country?.[0]?.name || 'Global';
+    const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'OCHA';
+    return {
+      id: `ocha_sit-${item.id}`,
+      datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
+      severity: 'warning', cat: 'konflik', region: 'global', badge: 'OCHA',
+      title_id: f.title, title_en: f.title,
+      desc_id: `Laporan situasi dari ${source} di ${country}.`,
+      desc_en: `Situation report from ${source} in ${country}.`,
+      source: `OCHA / ${source}`, loc: country,
+      url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
+      updates: [],
+    };
+  });
+}
+
+// ============================================================
 // ============================================================
 async function fetchWithTimeout(url, options = {}, ms = 9000) {
   const controller = new AbortController();
