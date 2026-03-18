@@ -269,6 +269,7 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
 .dsrch-ico{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);pointer-events:none}
 .dsrc-list{display:flex;flex-direction:column;gap:2px}
 .dsrc-row{display:flex;align-items:center;justify-content:space-between;font-family:var(--fm);font-size:11px;color:var(--text2);padding:3px 0}
+.dsrc-row-right{display:flex;align-items:center;gap:4px}
 .dsrc-bdg{font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px}
 .dsrc-bdg.ok{background:rgba(34,197,94,.12);color:var(--green)}
 .dsrc-bdg.err{background:var(--red-bg);color:#f87171}
@@ -544,7 +545,7 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
 </div>
 
 <script>
-let ALL=[],lang='id',cat='all',region='all',q='',page=1,selId=null,lastUpdated=null;
+let ALL=[],lang='id',cat='all',region='all',q='',page=1,selId=null,lastUpdated=null,srcArticleCounts={};
 const PER=10; // desktop pagination
 const MOB_BATCH=20; // mobile infinite scroll batch size
 let mobLoaded=0, mobObserver=null;
@@ -562,12 +563,25 @@ async function loadData(){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     ALL=d.events||[];lastUpdated=d.updated;
+    srcArticleCounts=d.article_counts||{};
     loadRetryCount = 0;
     checkNewCritical(ALL);
     if(d.sources)Object.entries(d.sources).forEach(([k,v])=>{
       const ok=v==='ok',c=ok?'ok':'err',l=ok?'OK':'ERR';
       const e=document.getElementById('ds-'+k);
-      if(e){e.textContent=l;e.className='dsrc-bdg '+c;}
+      if(e){
+        e.textContent=l;e.className='dsrc-bdg '+c;
+        // Tambah/update angka artikel di sebelah badge
+        let cntEl=document.getElementById('dc-'+k);
+        if(!cntEl){
+          cntEl=document.createElement('span');
+          cntEl.id='dc-'+k;
+          cntEl.style.cssText='font-family:var(--fm);font-size:9px;color:var(--text3);margin-right:3px';
+          e.parentNode.insertBefore(cntEl,e);
+        }
+        const cnt=srcArticleCounts[k]||0;
+        cntEl.textContent=cnt>0?cnt:'';
+      }
     });
     ['m-ldot','d-ldot'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.remove('spin')});
     const dl=document.getElementById('d-llbl');if(dl)dl.textContent='LIVE';
@@ -793,11 +807,27 @@ function openDrawer(type){
     const rAll=lang==='id'?'Semua':'All';
     body.innerHTML=`<div class="region-btns"><button class="rbtn${region==='all'?' active':''}" onclick="setRegion('all',this);closeDrawer()">${rAll}Semua</button><button class="rbtn${region==='id'?' active':''}" onclick="setRegion('id',this);closeDrawer()">Indonesia</button><button class="rbtn${region==='global'?' active':''}" onclick="setRegion('global',this);closeDrawer()">Global</button></div>`;
   }else if(type==='sources'){
-    title.textContent='Status Sumber Data';
-    const keys=[['bmkg','BMKG'],['usgs','USGS'],['eonet','NASA EONET'],['gdacs','GDACS (UN)'],['reliefweb','ReliefWeb (UN)'],['crisisgroup','Crisis Group'],['msf','Al Jazeera'],['who','WHO'],['noaa','NOAA / NHC'],['pvmbg','PVMBG / MAGMA'],['icrc','OCHA / Konflik'],['acled','ACLED']];
+    title.textContent=lang==='id'?'Status Sumber Data':'Data Source Status';
+    const keys=[
+      ['bmkg','BMKG'],['usgs','USGS'],['eonet','NASA EONET'],['gdacs','GDACS (UN)'],
+      ['reliefweb','ReliefWeb (UN)'],['crisisgroup','Crisis Group'],['msf','Al Jazeera'],
+      ['who','WHO'],['noaa','NOAA / NHC'],['pvmbg','PVMBG'],['bbc','BBC News'],
+      ['reuters','Reuters'],['un','UN News'],['dw','DW (Deutsche Welle)'],
+      ['france24','France24'],['voa','VOA News'],['rferl','RFE/RL'],
+      ['mee','Middle East Eye'],['hrw','Human Rights Watch'],['amnesty','Amnesty Intl'],
+      ['bellingcat','Bellingcat'],['unhcr','UNHCR'],['ocha_sit','OCHA Situations'],
+      ['konflik_id','Konflik Indonesia'],['id_foreign','Diplomasi RI'],
+      ['bnpb_gdacs','BNPB / GDACS (ID)'],['acled','ACLED']
+    ];
     const st={};document.querySelectorAll('[id^="ds-"]').forEach(el=>{st[el.id.replace('ds-','')]=el.textContent.trim();});
-    body.innerHTML=`<div class="srclist">${keys.map(([k,n])=>{const v=st[k]||'–',ok=v==='OK';return`<div class="srcrow"><span class="srcname">${n}</span><div style="display:flex;align-items:center;gap:6px"><span class="srclbl ${ok?'ok':'err'}">${v}</span><div class="srcdot ${ok?'ok':'err'}"></div></div></div>`;}).join('')}</div>
-    <div style="margin-top:16px"><button class="savebig" onclick="saveOffline();closeDrawer()"><svg width="15" height="15"><use href="#ico-dl"/></svg>Simpan snapshot offline</button></div>`;
+    body.innerHTML=`<div class="srclist">${keys.map(([k,n])=>{
+      const v=st[k]||'–',ok=v==='OK',isErr=v==='ERR';
+      const cls=ok?'ok':isErr?'err':'loading';
+      const cnt=srcArticleCounts[k]||0;
+      const cntHtml=cnt>0?`<span style="font-family:var(--fm);font-size:9px;color:var(--text3);margin-right:4px">${cnt}</span>`:'';
+      return`<div class="srcrow"><span class="srcname">${n}</span><div style="display:flex;align-items:center;gap:6px">${cntHtml}<span class="srclbl ${cls}">${v}</span><div class="srcdot ${cls}"></div></div></div>`;
+    }).join('')}</div>
+    <div style="margin-top:16px"><button class="savebig" onclick="saveOffline();closeDrawer()"><svg width="15" height="15"><use href="#ico-dl"/></svg>${lang==='id'?'Simpan snapshot offline':'Save offline snapshot'}</button></div>`;
   }
   drawer.classList.add('open');ov.classList.add('show');
 }
