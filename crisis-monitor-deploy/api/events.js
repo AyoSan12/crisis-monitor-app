@@ -35,9 +35,10 @@ module.exports = async function handler(req, res) {
     fetchUNHCR(),
     fetchUNOCHASituations(),
     fetchKonflikIndonesia(),
+    fetchIndonesiaForeignPolicy(),
   ]);
 
-  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit','konflik_id'];
+  const keys = ['bmkg','usgs','eonet','reliefweb','gdacs','who','noaa','acled','pvmbg','icrc','crisisgroup','msf','bbc','reuters','un','dw','france24','voa','rferl','mee','hrw','amnesty','bellingcat','unhcr','ocha_sit','konflik_id','id_foreign'];
   const sources = {};
   keys.forEach((k, i) => {
     sources[k] = results[i].status === 'fulfilled' ? 'ok' : (results[i].reason?.message || 'error');
@@ -183,16 +184,19 @@ async function fetchEONET() {
 // ReliefWeb (UN) — API resmi laporan krisis kemanusiaan
 // ============================================================
 async function fetchReliefWeb() {
-  // Simple GET — paling kompatibel, tidak perlu body
-  const res = await fetchWithTimeout(
-    'https://api.reliefweb.int/v1/reports?appname=crisismonitor&limit=15&sort[]=date:desc&fields[include][]=title&fields[include][]=date&fields[include][]=source&fields[include][]=country&fields[include][]=disaster_type&fields[include][]=url_alias',
-    {
-      headers: {
-        'User-Agent': 'CrisisMonitor/1.0',
-        'Accept': 'application/json',
-      },
-    }
-  );
+  // Try v1 API with profile=list (more permissive), fallback to RSS
+  const urls = [
+    'https://api.reliefweb.int/v1/reports?appname=crisismonitor&profile=list&limit=15&sort[]=date:desc&fields[include][]=title&fields[include][]=date&fields[include][]=source&fields[include][]=country&fields[include][]=disaster_type&fields[include][]=url_alias',
+    'https://api.reliefweb.int/v1/reports?appname=crisis_monitor_app&limit=15&sort[]=date:desc',
+  ];
+  let res, lastErr;
+  for (const u of urls) {
+    try {
+      res = await fetchWithTimeout(u, { headers: { 'User-Agent': 'Mozilla/5.0 CrisisMonitor/1.0', 'Accept': 'application/json' } });
+      break;
+    } catch(e) { lastErr = e; }
+  }
+  if (!res) throw lastErr;
   const data = await res.json();
   const catMap = {
     'Flood':            { cat: 'bencana',   badge: 'BANJIR',     severity: 'warning'  },
@@ -563,47 +567,33 @@ async function fetchPVMBG() {
 async function fetchKonflikIndonesia() {
   const results = [];
 
-  // 1. ReliefWeb — laporan konflik & keamanan di Indonesia
+  // 1. Al Jazeera filter Indonesia konflik (sudah confirmed working)
   try {
-    const body = JSON.stringify({
-      preset: 'latest', limit: 8,
-      filter: { operator: 'AND', conditions: [
-        { field: 'country.name', value: 'Indonesia' },
-        { operator: 'OR', conditions: [
-          { field: 'disaster_type.name', value: 'Conflict' },
-          { field: 'theme.name', value: 'Safety and Security' },
-        ]},
-      ]},
-      fields: { include: ['title','date','source','country','url_alias'] },
-      sort: ['date:desc'],
+    const items = await fetchConflictRSS({
+      url: 'https://www.aljazeera.com/xml/rss/all.xml',
+      srcKey: 'konflik_id', srcName: 'Al Jazeera (ID)', badge: 'KONFLIK ID',
+      extraKeywords: ['indonesia','papua','jakarta','kalimantan','sulawesi','aceh','kkb','separatist','armed group'],
+      limit: 5
     });
-    const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
-      body,
-    });
-    const data = await res.json();
-    (data?.data || []).forEach(item => {
-      const f = item.fields;
-      const dt = f.date?.created ? new Date(f.date.created) : new Date();
-      const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'ReliefWeb';
-      results.push({
-        id: `konflik_id-rw-${item.id}`,
-        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
-        severity: 'warning', cat: 'konflik', region: 'id', badge: 'KONFLIK',
-        title_id: f.title, title_en: f.title,
-        desc_id: `Laporan keamanan/konflik di Indonesia dari ${source}.`,
-        desc_en: `Security/conflict report in Indonesia from ${source}.`,
-        source, loc: 'Indonesia',
-        url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
-        updates: [],
-      });
-    });
+    const idItems = items.filter(ev => /indonesia|papua|jakarta|aceh|kalimantan|sulawesi/i.test(ev.title_en+' '+(ev.desc_en||'')));
+    idItems.forEach(ev => { ev.region = 'id'; results.push(ev); });
   } catch(e) {}
 
-  // 2. ACLED Indonesia — kalau key tersedia, ambil khusus Indonesia
+  // 2. BBC News filter Indonesia
   try {
-    const key   = process.env.ACLED_API_KEY;
+    const items = await fetchConflictRSS({
+      url: 'https://feeds.bbci.co.uk/news/world/rss.xml',
+      srcKey: 'konflik_id', srcName: 'BBC News (ID)', badge: 'KONFLIK ID',
+      extraKeywords: ['indonesia','papua','jakarta','aceh','kkb'],
+      limit: 5
+    });
+    const idItems = items.filter(ev => /indonesia|papua|jakarta|aceh/i.test(ev.title_en+' '+(ev.desc_en||'')));
+    idItems.forEach(ev => { ev.region = 'id'; results.push(ev); });
+  } catch(e) {}
+
+  // 3. ACLED Indonesia (jika API key tersedia)
+  try {
+    const key = process.env.ACLED_API_KEY;
     const email = process.env.ACLED_EMAIL;
     if (key && email) {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -613,62 +603,100 @@ async function fetchKonflikIndonesia() {
       (data?.data || []).forEach((ev, i) => {
         const dt = new Date(ev.event_date);
         const fatal = parseInt(ev.fatalities) || 0;
-        const region = ev.admin1 || 'Indonesia';
         results.push({
           id: `konflik_id-acled-${i}-${dt.getTime()}`,
           datetime: dt.toISOString(), date: toDateStr(dt), time: '00:00',
           severity: fatal > 0 ? 'critical' : 'warning',
-          cat: 'konflik', region: 'id', badge: 'KONFLIK',
-          title_id: `${ev.event_type} — ${ev.location}, ${region}`,
-          title_en: `${ev.event_type} — ${ev.location}, ${region}`,
-          desc_id: `${ev.notes || '–'}${fatal > 0 ? ` Korban jiwa: ${fatal}.` : ''}`,
-          desc_en: `${ev.notes || '–'}${fatal > 0 ? ` Fatalities: ${fatal}.` : ''}`,
-          source: 'ACLED', loc: `${ev.location}, ${region}`,
-          url: 'https://acleddata.com',
-          updates: [],
+          cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
+          title_id: `${ev.event_type} — ${ev.location}, ${ev.admin1||'Indonesia'}`,
+          title_en: `${ev.event_type} — ${ev.location}, ${ev.admin1||'Indonesia'}`,
+          desc_id: `${ev.notes||'–'}${fatal>0?` Korban jiwa: ${fatal}.`:''}`,
+          desc_en: `${ev.notes||'–'}${fatal>0?` Fatalities: ${fatal}.`:''}`,
+          source: 'ACLED', loc: `${ev.location}, Indonesia`,
+          url: 'https://acleddata.com', updates: [],
         });
       });
     }
   } catch(e) {}
 
-  // 3. Crisis Group — laporan konflik Indonesia (Papua, KKB, separatisme)
+  if (results.length === 0) throw new Error('Tidak ada data konflik Indonesia');
+  // Deduplicate by title
+  const seen = new Set();
+  return results.filter(ev => { if(seen.has(ev.title_en)) return false; seen.add(ev.title_en); return true; })
+    .sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+}
+
+// ============================================================
+// Kebijakan Luar Negeri Indonesia — Diplomasi konflik & perang
+// Sumber: Kemlu RI RSS + filter berita RI dari media internasional
+// ============================================================
+async function fetchIndonesiaForeignPolicy() {
+  const results = [];
+
+  // 1. Kementerian Luar Negeri RI — press release & pernyataan resmi
   try {
-    const body = JSON.stringify({
-      preset: 'latest', limit: 5,
-      filter: { operator: 'AND', conditions: [
-        { field: 'country.name', value: 'Indonesia' },
-      ]},
-      fields: { include: ['title','date','source','country','url_alias'] },
-      sort: ['date:desc'],
+    const res = await fetchWithTimeout('https://kemlu.go.id/portal/id/read/feed/rss', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CrisisMonitor/1.0)', 'Accept': 'application/rss+xml, text/xml' }
     });
-    const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
-      body,
-    });
-    const data = await res.json();
-    const keywords = ['papua','kkb','separatis','terorisme','teroris','bersenjata','kerusuhan','bentrokan','penyerangan','pembunuhan','kelompok bersenjata','armed','violence','attack','militant','insurgent'];
-    (data?.data || []).filter(item => keywords.some(k => (item.fields?.title||'').toLowerCase().includes(k))).slice(0,5).forEach(item => {
-      const f = item.fields;
-      const dt = f.date?.created ? new Date(f.date.created) : new Date();
-      const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'ReliefWeb';
-      if (results.some(r => r.id.includes(item.id))) return; // skip duplicate
-      results.push({
-        id: `konflik_id-kw-${item.id}`,
-        datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
-        severity: 'warning', cat: 'konflik', region: 'id', badge: 'KONFLIK ID',
-        title_id: f.title, title_en: f.title,
-        desc_id: `Laporan situasi keamanan Indonesia dari ${source}.`,
-        desc_en: `Indonesia security situation report from ${source}.`,
-        source, loc: 'Indonesia',
-        url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
-        updates: [],
+    const text = await res.text();
+    const items = [...text.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
+    const keywords = ['perang','konflik','gencatan senjata','serangan','pasukan','militer','senjata','diplomatik','mediasi','perdamaian','sandera','pbb','nato','ukraina','iran','israel','palestina','myanmar','sudan','krisis','kemanusiaan','evakuasi'];
+    function extract(block, tag) {
+      const m = block.match(new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([^<]*)<\/${tag}>`));
+      return m ? cleanDesc(m[1] || m[2] || '') : '';
+    }
+    items.filter(m => keywords.some(k => m[1].toLowerCase().includes(k)))
+      .slice(0, 6).forEach((m, i) => {
+        const block = m[1];
+        const title = extract(block, 'title').slice(0, 200);
+        const desc  = extract(block, 'description').slice(0, 400);
+        const link  = extract(block, 'link');
+        const pub   = extract(block, 'pubDate');
+        const dt    = pub ? new Date(pub) : new Date();
+        const safedt = isNaN(dt) ? new Date() : dt;
+        if (!title || title.length < 5) return;
+        results.push({
+          id: `kemlu-${i}-${safedt.getTime()}`,
+          datetime: safedt.toISOString(), date: toDateStr(safedt), time: toTimeUTC(safedt),
+          severity: 'info', cat: 'konflik', region: 'id', badge: 'KEMLU RI',
+          title_id: title, title_en: title,
+          desc_id: desc || 'Pernyataan resmi Kementerian Luar Negeri Republik Indonesia.',
+          desc_en: desc || 'Official statement from the Ministry of Foreign Affairs of Indonesia.',
+          source: 'Kemlu RI', loc: 'Indonesia',
+          url: link || 'https://kemlu.go.id',
+          updates: [],
+        });
       });
-    });
   } catch(e) {}
 
-  if (results.length === 0) throw new Error('Tidak ada data konflik Indonesia');
-  return results.sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+  // 2. Filter berita internasional tentang kebijakan Indonesia
+  try {
+    const items = await fetchConflictRSS({
+      url: 'https://www.aljazeera.com/xml/rss/all.xml',
+      srcKey: 'id_foreign', srcName: 'Al Jazeera (RI Luar Negeri)', badge: 'DIPLOMASI RI',
+      extraKeywords: ['indonesia foreign','indonesia peace','indonesia mediat','indonesia diplomat','indonesia war','indonesia troops','indonesia military','indonesia ukraine','indonesia iran','indonesia myanmar','indonesia un','indonesia asean'],
+      limit: 5
+    });
+    const filtered = items.filter(ev => /indonesia/i.test(ev.title_en+' '+(ev.desc_en||'')));
+    filtered.forEach(ev => { ev.region = 'id'; ev.badge = 'DIPLOMASI RI'; results.push(ev); });
+  } catch(e) {}
+
+  // 3. UN News filter Indonesia
+  try {
+    const items = await fetchConflictRSS({
+      url: 'https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml',
+      srcKey: 'id_foreign', srcName: 'UN News (RI)', badge: 'DIPLOMASI RI',
+      extraKeywords: ['indonesia'],
+      limit: 5
+    });
+    const filtered = items.filter(ev => /indonesia/i.test(ev.title_en+' '+(ev.desc_en||'')));
+    filtered.forEach(ev => { ev.region = 'id'; ev.badge = 'DIPLOMASI RI'; results.push(ev); });
+  } catch(e) {}
+
+  if (results.length === 0) throw new Error('Tidak ada data kebijakan luar negeri Indonesia');
+  const seen = new Set();
+  return results.filter(ev => { if(seen.has(ev.title_en)) return false; seen.add(ev.title_en); return true; })
+    .sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
 }
 
 // ============================================================
@@ -767,7 +795,18 @@ async function fetchBBCConflict() {
 // Reuters World News
 // ============================================================
 async function fetchReuters() {
-  return fetchConflictRSS({ url: 'https://feeds.reuters.com/reuters/worldNews', srcKey: 'reuters', srcName: 'Reuters', badge: 'KONFLIK' });
+  // Reuters has Cloudflare — try multiple alternatives
+  const feeds = [
+    { url: 'https://feeds.reuters.com/reuters/worldNews', name: 'Reuters' },
+    { url: 'https://www.theguardian.com/world/rss', name: 'The Guardian' },
+    { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', name: 'NY Times' },
+  ];
+  for (const feed of feeds) {
+    try {
+      return await fetchConflictRSS({ url: feed.url, srcKey: 'reuters', srcName: feed.name, badge: 'KONFLIK', limit: 10 });
+    } catch(e) { continue; }
+  }
+  throw new Error('Reuters/Guardian/NYT semua tidak dapat diakses');
 }
 
 // ============================================================
@@ -893,51 +932,44 @@ async function fetchBellingcat() {
 // UNHCR — Data pengungsi akibat konflik & bencana
 // ============================================================
 async function fetchUNHCR() {
-  return fetchConflictRSS({ url: 'https://www.unhcr.org/rss/news.xml', srcKey: 'unhcr', srcName: 'UNHCR', badge: 'PENGUNGSI',
-    extraKeywords: ['refugee','displacement','fleeing','conflict','persecution','asylum','stateless','return'],
-    allItems: false, limit: 8 });
+  // Try multiple UNHCR RSS endpoints
+  const feeds = [
+    'https://www.unhcr.org/rss/news.xml',
+    'https://www.unhcr.org/en/rss/news',
+    'https://www.unhcr.org/news/rss',
+    'https://news.un.org/feed/subscribe/en/news/topic/humanitarian-affairs/feed/rss.xml',
+  ];
+  for (const url of feeds) {
+    try {
+      return await fetchConflictRSS({ url, srcKey: 'unhcr', srcName: 'UNHCR', badge: 'PENGUNGSI',
+        extraKeywords: ['refugee','displacement','fleeing','conflict','persecution','asylum','stateless','return','camp','humanitarian'],
+        allItems: false, limit: 8 });
+    } catch(e) { continue; }
+  }
+  throw new Error('UNHCR RSS tidak tersedia');
 }
 
 // ============================================================
 // OCHA Situations — Update situasi kemanusiaan per konflik
 // ============================================================
 async function fetchUNOCHASituations() {
-  // ReliefWeb: laporan krisis & konflik terbaru dengan filter konflik
-  const body = JSON.stringify({
-    preset: 'latest', limit: 10,
-    filter: { operator: 'OR', conditions: [
-      { field: 'disaster_type.name', value: 'Conflict' },
-      { field: 'theme.name', value: 'Peacekeeping and Peacebuilding' },
-    ]},
-    fields: { include: ['title','date','source','country','url_alias','body-html'] },
-    sort: ['date:desc'],
-  });
-  const res = await fetchWithTimeout('https://api.reliefweb.int/v1/reports?appname=crisismonitor', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'CrisisMonitor/1.0' },
-    body,
-  });
-  const data = await res.json();
-  return (data?.data || []).map(item => {
-    const f = item.fields;
-    const dt = f.date?.created ? new Date(f.date.created) : new Date();
-    const country = f.country?.[0]?.name || 'Global';
-    const source = Array.isArray(f.source) ? f.source.map(s=>s.name).join(', ') : 'OCHA';
-    return {
-      id: `ocha_sit-${item.id}`,
-      datetime: dt.toISOString(), date: toDateStr(dt), time: toTimeUTC(dt),
-      severity: 'warning', cat: 'konflik', region: 'global', badge: 'OCHA',
-      title_id: f.title, title_en: f.title,
-      desc_id: `Laporan situasi dari ${source} di ${country}.`,
-      desc_en: `Situation report from ${source} in ${country}.`,
-      source: `OCHA / ${source}`, loc: country,
-      url: f.url_alias ? `https://reliefweb.int${f.url_alias}` : 'https://reliefweb.int',
-      updates: [],
-    };
-  });
+  // ReliefWeb POST sering 403 dari Vercel — pakai UN OCHA RSS langsung
+  const feeds = [
+    'https://reliefweb.int/updates/rss.xml',
+    'https://news.un.org/feed/subscribe/en/news/type/press-release/feed/rss.xml',
+    'https://www.unocha.org/rss.xml',
+  ];
+  for (const url of feeds) {
+    try {
+      const items = await fetchConflictRSS({ url, srcKey: 'ocha_sit', srcName: 'OCHA / ReliefWeb', badge: 'OCHA',
+        extraKeywords: ['crisis','humanitarian','conflict','displacement','ceasefire','emergency','aid','civilian'],
+        allItems: false, limit: 8 });
+      if (items.length > 0) return items;
+    } catch(e) { continue; }
+  }
+  throw new Error('OCHA RSS tidak tersedia');
 }
 
-// ============================================================
 // ============================================================
 async function fetchWithTimeout(url, options = {}, ms = 9000) {
   const controller = new AbortController();
