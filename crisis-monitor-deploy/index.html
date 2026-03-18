@@ -24,7 +24,7 @@
   --sb:env(safe-area-inset-bottom,0px);
   --st:env(safe-area-inset-top,0px);
 }
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px;line-height:1.6;overflow:hidden}
+html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px;line-height:1.6;overflow:hidden}
 
 /* === LIVE DOT === */
 .ldot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite;flex-shrink:0}
@@ -56,7 +56,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .pg-info{font-family:var(--fm);font-size:11px;color:var(--text3);padding:0 4px}
 
 /* ===================== MOBILE ===================== */
-.mob{display:flex;flex-direction:column;height:100dvh;height:100vh;overflow:hidden}
+.mob{display:flex;flex-direction:column;height:100dvh;height:100vh;height:-webkit-fill-available;overflow:hidden}
 
 /* top bar */
 .topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:10px 16px;padding-top:calc(10px + var(--st));display:flex;align-items:center;gap:10px;flex-shrink:0;z-index:10}
@@ -815,8 +815,15 @@ function setLang(l,el,ctx){
 }
 function toggleSrch(){const b=document.getElementById('srchbar');if(b.classList.toggle('show'))document.getElementById('m-srch').focus();}
 
+// Fix viewport height on mobile (handles browser chrome/toolbar)
+function setVh(){
+  const mob=document.getElementById('mob');
+  if(mob && window.innerWidth<860) mob.style.height=window.innerHeight+'px';
+}
+setVh();
 // Handle resize between mobile/desktop
-window.addEventListener('resize',()=>render());
+window.addEventListener('resize',()=>{setVh();render();});
+window.addEventListener('orientationchange',()=>setTimeout(()=>{setVh();render();},300));
 
 /* ===== CLOCK ===== */
 function tick(){
@@ -854,6 +861,12 @@ window.addEventListener('popstate', function(e) {
 });
 
 loadData();
+// Ensure correct height on initial load (mobile browser bar fix)
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',setVh);
+}else{
+  setTimeout(setVh,100);
+}
 </script>
 </body>
 </html>
