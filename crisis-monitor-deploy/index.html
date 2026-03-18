@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Crisis Monitor</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#0a0b0d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -69,6 +72,22 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
 .topbar-btns{display:flex;gap:6px;align-items:center}
 .ibtn{width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;cursor:pointer;color:var(--text2);transition:all .12s}
 .ibtn:active{background:var(--bg4);transform:scale(.94)}
+.ibtn.notif-on{background:rgba(224,62,62,.15);border-color:rgba(224,62,62,.4);color:var(--red)}
+
+/* notif info modal */
+.notif-modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:80;display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .22s}
+.notif-modal-ov.show{opacity:1;pointer-events:all}
+.notif-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:18px 18px 0 0;padding:24px 20px 32px;width:100%;max-width:500px;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,0,.67,0)}
+.notif-modal-ov.show .notif-modal{transform:translateY(0);transition:transform .28s cubic-bezier(.33,1,.68,1)}
+.notif-modal-handle{width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 20px}
+.notif-modal-icon{width:48px;height:48px;background:var(--red-bg);border:1px solid var(--red-border);border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:22px}
+.notif-modal-title{font-size:16px;font-weight:600;text-align:center;margin-bottom:8px;color:var(--text)}
+.notif-modal-body{font-size:13px;color:var(--text2);text-align:center;line-height:1.7;margin-bottom:6px}
+.notif-modal-badge{display:inline-flex;align-items:center;gap:5px;background:var(--red-bg);border:1px solid var(--red-border);color:#f87171;font-family:var(--fm);font-size:10px;padding:3px 9px;border-radius:4px;margin:8px auto 20px;display:flex;justify-content:center;width:fit-content;margin-left:auto;margin-right:auto}
+.notif-modal-btn{width:100%;padding:14px;border-radius:10px;background:var(--red);border:none;color:#fff;font-size:15px;font-family:var(--ff);font-weight:600;cursor:pointer;margin-bottom:10px;transition:opacity .1s}
+.notif-modal-btn:active{opacity:.8}
+.notif-modal-cancel{width:100%;padding:11px;border-radius:10px;background:transparent;border:1px solid var(--border2);color:var(--text2);font-size:14px;font-family:var(--ff);cursor:pointer;transition:all .1s}
+.notif-modal-cancel:active{background:var(--bg3)}
 .ltog{display:flex;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;overflow:hidden}
 .lbtn{padding:5px 9px;font-family:var(--fm);font-size:10px;color:var(--text3);background:transparent;border:none;cursor:pointer;transition:all .1s;letter-spacing:.03em}
 .lbtn.active{background:var(--bg5);color:var(--text)}
@@ -334,6 +353,9 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
     <div class="topbar-btns">
       <div class="livechip"><div class="ldot spin" id="m-ldot"></div><span id="m-ltime">--:--</span></div>
       <div class="ibtn" onclick="toggleSrch()"><svg width="15" height="15"><use href="#ico-search"/></svg></div>
+      <div class="ibtn" id="m-notif-btn" onclick="handleNotifBtn()" title="Notifikasi">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </div>
       <div class="ltog">
         <button class="lbtn active" onclick="setLang('id',this,'mob')">ID</button>
         <button class="lbtn" onclick="setLang('en',this,'mob')">EN</button>
@@ -378,10 +400,26 @@ html,body{height:100%;height:-webkit-fill-available;background:var(--bg);color:v
   </div>
 
   <div class="bnav">
-    <button class="bni" onclick="openDrawer('filter')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-filter"/></svg></div>Filter</button>
-    <button class="bni" onclick="openDrawer('region')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-globe"/></svg></div>Wilayah</button>
-    <button class="bni" onclick="openDrawer('sources')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-doc"/></svg></div>Sumber</button>
-    <button class="bni" onclick="saveOffline()"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-dl"/></svg></div>Simpan</button>
+    <button class="bni" onclick="openDrawer('filter')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-filter"/></svg></div><span data-id="Filter" data-en="Filter">Filter</span></button>
+    <button class="bni" onclick="openDrawer('region')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-globe"/></svg></div><span data-id="Wilayah" data-en="Region">Wilayah</span></button>
+    <button class="bni" onclick="openDrawer('sources')"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-doc"/></svg></div><span data-id="Sumber" data-en="Sources">Sumber</span></button>
+    <button class="bni" onclick="saveOffline()"><div class="bni-ic"><svg width="18" height="18"><use href="#ico-dl"/></svg></div><span data-id="Simpan" data-en="Save">Simpan</span></button>
+  </div>
+</div>
+
+<!-- NOTIF MODAL -->
+<div class="notif-modal-ov" id="notif-modal-ov" onclick="closeNotifModal(event)">
+  <div class="notif-modal">
+    <div class="notif-modal-handle"></div>
+    <div class="notif-modal-icon">🔔</div>
+    <div class="notif-modal-title" id="notif-modal-title">Aktifkan Notifikasi</div>
+    <div class="notif-modal-body" id="notif-modal-body">Crisis Monitor akan mengirim notifikasi browser saat ada kejadian baru.</div>
+    <div class="notif-modal-badge" id="notif-modal-badge">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+      CRITICAL ONLY
+    </div>
+    <button class="notif-modal-btn" id="notif-modal-confirm" onclick="confirmNotif()">Aktifkan</button>
+    <button class="notif-modal-cancel" onclick="closeNotifModal()">Nanti saja</button>
   </div>
 </div>
 
@@ -522,6 +560,7 @@ async function loadData(){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     ALL=d.events||[];lastUpdated=d.updated;
+    checkNewCritical(ALL);
     if(d.sources)Object.entries(d.sources).forEach(([k,v])=>{
       const ok=v==='ok',c=ok?'ok':'err',l=ok?'OK':'ERR';
       const e=document.getElementById('ds-'+k);
@@ -781,13 +820,8 @@ function setLang(l,el,ctx){
   ['lbl-mw','lbl-dw'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=lbls.w;});
   ['lbl-mt','lbl-dt'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=lbls.t;});
   // Translate bottom nav
-  const bnav = document.querySelectorAll('.bni');
-  const bnavLabels = l==='id'
-    ? ['Filter','Wilayah','Sumber','Simpan']
-    : ['Filter','Region','Sources','Save'];
-  bnav.forEach((btn,i)=>{
-    const span = btn.querySelector('span');
-    if(span && bnavLabels[i]) span.textContent = bnavLabels[i];
+  document.querySelectorAll('.bni span').forEach(span => {
+    span.textContent = l === 'id' ? span.dataset.id : span.dataset.en;
   });
   // Translate filter chips (mobile)
   document.querySelectorAll('.chip-label').forEach(el => {
@@ -811,9 +845,101 @@ function setLang(l,el,ctx){
   if(ddetEmpty) ddetEmpty.innerHTML = l==='id' ? 'Pilih kejadian<br>untuk melihat detail' : 'Select an event<br>to view details';
   const html = document.documentElement;
   html.setAttribute('lang', l);
+  updateNotifBtn();
   render();updCounts();if(selId)selectEv(selId);
 }
 function toggleSrch(){const b=document.getElementById('srchbar');if(b.classList.toggle('show'))document.getElementById('m-srch').focus();}
+
+/* ===== NOTIFICATIONS ===== */
+let notifEnabled = false;
+let seenCriticalIds = new Set();
+
+function handleNotifBtn() {
+  if (Notification.permission === 'denied') {
+    // Already denied — show info in current lang
+    alert(lang === 'id'
+      ? 'Notifikasi diblokir oleh browser. Buka pengaturan browser untuk mengizinkan notifikasi dari situs ini.'
+      : 'Notifications are blocked by your browser. Open browser settings to allow notifications from this site.');
+    return;
+  }
+  if (notifEnabled) {
+    // Turn off
+    notifEnabled = false;
+    localStorage.setItem('notif', '0');
+    updateNotifBtn();
+    return;
+  }
+  // Show modal
+  openNotifModal();
+}
+
+function openNotifModal() {
+  const isId = lang === 'id';
+  document.getElementById('notif-modal-title').textContent = isId ? 'Aktifkan Notifikasi' : 'Enable Notifications';
+  document.getElementById('notif-modal-body').textContent = isId
+    ? 'Crisis Monitor akan mengirim notifikasi browser saat ada kejadian baru yang terdeteksi.'
+    : 'Crisis Monitor will send browser notifications when new events are detected.';
+  document.getElementById('notif-modal-badge').innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="#f87171"><circle cx="12" cy="12" r="10"/></svg>&nbsp;${isId ? 'KRITIS SAJA · CRITICAL ONLY' : 'CRITICAL ONLY · KRITIS SAJA'}`;
+  document.getElementById('notif-modal-confirm').textContent = isId ? 'Aktifkan' : 'Enable';
+  document.getElementById('notif-modal-ov').classList.add('show');
+}
+
+function closeNotifModal(e) {
+  if (e && e.target !== document.getElementById('notif-modal-ov')) return;
+  document.getElementById('notif-modal-ov').classList.remove('show');
+}
+
+async function confirmNotif() {
+  document.getElementById('notif-modal-ov').classList.remove('show');
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    notifEnabled = true;
+    localStorage.setItem('notif', '1');
+    // Seed seen ids so we don't fire on existing events
+    ALL.filter(e => e.severity === 'critical').forEach(e => seenCriticalIds.add(e.id));
+    updateNotifBtn();
+    new Notification(lang === 'id' ? 'Crisis Monitor — Notifikasi Aktif ✓' : 'Crisis Monitor — Notifications On ✓', {
+      body: lang === 'id' ? 'Kamu akan diberitahu saat ada kejadian KRITIS baru.' : 'You will be alerted when new CRITICAL events appear.',
+      icon: '/icon-192.png',
+    });
+  }
+}
+
+function updateNotifBtn() {
+  const btn = document.getElementById('m-notif-btn');
+  if (!btn) return;
+  if (notifEnabled && Notification.permission === 'granted') {
+    btn.classList.add('notif-on');
+    btn.title = lang === 'id' ? 'Notifikasi aktif — ketuk untuk matikan' : 'Notifications on — tap to disable';
+  } else {
+    btn.classList.remove('notif-on');
+    btn.title = lang === 'id' ? 'Aktifkan notifikasi KRITIS' : 'Enable CRITICAL notifications';
+  }
+}
+
+function checkNewCritical(newEvents) {
+  if (!notifEnabled || Notification.permission !== 'granted') return;
+  const newCriticals = newEvents.filter(e => e.severity === 'critical' && !seenCriticalIds.has(e.id));
+  newCriticals.forEach(e => {
+    seenCriticalIds.add(e.id);
+    const title = lang === 'id' ? e.title_id : e.title_en;
+    const body = lang === 'id' ? e.desc_id : e.desc_en;
+    new Notification(`🔴 ${lang === 'id' ? 'KRITIS' : 'CRITICAL'} — ${e.badge}`, {
+      body: title + (body ? '\n' + body.slice(0, 80) : ''),
+      icon: '/icon-192.png',
+      tag: e.id,
+    });
+  });
+}
+
+// Restore notif preference
+(function initNotif() {
+  const saved = localStorage.getItem('notif');
+  if (saved === '1' && Notification.permission === 'granted') {
+    notifEnabled = true;
+  }
+  updateNotifBtn();
+})();
 
 // Fix viewport height on mobile (handles browser chrome/toolbar)
 function setVh(){

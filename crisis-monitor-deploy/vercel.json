@@ -3,5 +3,15 @@
     "api/events.js": {
       "maxDuration": 15
     }
-  }
+  },
+  "headers": [
+    {
+      "source": "/manifest.json",
+      "headers": [{ "key": "Content-Type", "value": "application/manifest+json" }]
+    },
+    {
+      "source": "/icon-(192|512).png",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }]
+    }
+  ]
 }
